@@ -1,0 +1,52 @@
+{
+  "name": "plantuml-mcp-server",
+  "version": "0.1.11",
+  "description": "MCP server for generating PlantUML diagrams",
+  "author": "mzagar",
+  "license": "MIT",
+  "homepage": "https://github.com/infobip/plantuml-mcp-server#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/infobip/plantuml-mcp-server.git"
+  },
+  "bugs": {
+    "url": "https://github.com/infobip/plantuml-mcp-server/issues"
+  },
+  "type": "module",
+  "main": "dist/plantuml-mcp-server.js",
+  "module": "src/plantuml-mcp-server.ts",
+  "bin": {
+    "plantuml-mcp-server": "dist/plantuml-mcp-server.js"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/plantuml-mcp-server.js",
+    "prepublishOnly": "npm run build",
+    "smithery:build": "npx @smithery/cli build",
+    "smithery:dev": "npx @smithery/cli dev"
+  },
+  "keywords": [
+    "mcp",
+    "plantuml",
+    "diagrams",
+    "claude"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.4.0",
+    "plantuml-encoder": "^1.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/plantuml-encoder": "^1.4.2",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
