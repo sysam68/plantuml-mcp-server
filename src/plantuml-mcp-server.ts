@@ -434,6 +434,64 @@ function wasCalledAsScript() {
 }
 
 if (wasCalledAsScript()) {
-  const server = new PlantUMLMCPServer();
-  server.run().catch(console.error);
+  const transport = process.env.TRANSPORT || "stdio";
+  const port = process.env.PORT ? parseInt(process.env.PORT) : 8765;
+
+  if (transport === "http") {
+    // --- HTTP mode for Flowise / OpenWebUI ---
+    import("express").then(({ default: express }) => {
+      const app = express();
+      app.use(express.json());
+
+      const server = new PlantUMLMCPServer();
+
+      console.log(`🌐 Starting PlantUML MCP HTTP server on port ${port}`);
+
+      // MCP Metadata endpoint
+      app.get("/.well-known/mcp/server-metadata", (req, res) => {
+        res.json({
+          name: "plantuml-server",
+          version: "0.1.0",
+          description: "HTTP-compatible MCP server for PlantUML diagrams",
+          transport: "http",
+        });
+      });
+
+      // List tools
+      app.get("/tools", (req, res) => {
+        res.json({
+          tools: [
+            { name: "generate_plantuml_diagram" },
+            { name: "encode_plantuml" },
+            { name: "decode_plantuml" },
+          ],
+        });
+      });
+
+      // Invoke a tool
+      app.post("/tools/:toolName/invoke", async (req, res) => {
+        const tool = req.params.toolName;
+        try {
+          const response = await server
+            .getServer()
+            .handleRequest({
+              method: "tools/call",
+              params: { name: tool, arguments: req.body?.input || {} },
+            });
+          res.json(response);
+        } catch (err: any) {
+          console.error("❌ Tool error:", err);
+          res.status(500).json({ error: err.message });
+        }
+      });
+
+      app.listen(port, () => {
+        console.log(`✅ PlantUML MCP HTTP server listening at http://localhost:${port}`);
+      });
+    });
+  } else {
+    // --- Default STDIO mode ---
+    const server = new PlantUMLMCPServer();
+    server.run().catch(console.error);
+  }
 }
