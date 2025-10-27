@@ -21,10 +21,19 @@ import express from "express";
 import plantumlEncoder from "plantuml-encoder";
 import { v4 as uuidv4 } from "uuid";
 
-const LOG_LEVEL = process.env.LOG_LEVEL || "info";
-const LEVELS = { error: 0, warn: 1, info: 2, debug: 3 };
+const LEVELS: Record<"error" | "warn" | "info" | "debug", number> = {
+  error: 0,
+  warn: 1,
+  info: 2,
+  debug: 3,
+};
+
+const LOG_LEVEL = (process.env.LOG_LEVEL || "info") as keyof typeof LEVELS;
+
 function log(level: keyof typeof LEVELS, message: string, ...args: any[]) {
-  if (LEVELS[level] <= LEVELS[LOG_LEVEL]) {
+  const currentLevel = LEVELS[LOG_LEVEL];
+  const msgLevel = LEVELS[level];
+  if (msgLevel <= currentLevel) {
     const ts = new Date().toISOString();
     console.log(`[${ts}] [${level.toUpperCase()}] ${message}`, ...args);
   }
