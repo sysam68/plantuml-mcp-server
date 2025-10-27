@@ -9,7 +9,7 @@ const LOG_LEVELS = ["error", "warn", "info", "debug"];
 const LOG_LEVEL = process.env.LOG_LEVEL || "info";
 const currentLogLevelIndex = LOG_LEVELS.indexOf(LOG_LEVEL);
 
-function log(level, message) {
+function log(level: string, message: string): void {
   if (LOG_LEVELS.indexOf(level) <= currentLogLevelIndex) {
     console.error(`[${level.toUpperCase()}] ${message}`);
   }
@@ -105,18 +105,14 @@ function decodePlantUML(args: any) {
   return `Decoded PlantUML:\n\`\`\`plantuml\n${decoded}\n\`\`\``;
 }
 
-// --- Server setup (Brave Search style) ---
-const server = new Server(
-  {
-    name: "plantuml-mcp-server",
-    version: "1.0.0",
+// --- Server setup  ---
+const server = new Server({
+  name: "plantuml-mcp-server",
+  version: "1.0.0",
+  capabilities: {
+    tools: {},
   },
-  {
-    capabilities: {
-      tools: {},
-    },
-  }
-);
+});
 
 // --- Handle requests ---
 server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -132,7 +128,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   // Authentication check
   if (MCP_API_KEY) {
-    const authHeader = request.headers?.authorization;
+    const headers = (request as any).headers;
+    const authHeader = headers?.authorization;
     if (!authHeader || authHeader !== `Bearer ${MCP_API_KEY}`) {
       log("warn", "Unauthorized CallTool request blocked due to missing or invalid authorization header.");
       return {
@@ -168,15 +165,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
     log("debug", `Tool result: ${result}`);
     return { content: [{ type: "text", text: result }] };
-  } catch (error) {
-    log("error", `Error handling CallTool request: ${error.stack || error.message || error}`);
+  } catch (error: unknown) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    log("error", `Error handling CallTool request: ${errMsg}`);
     return {
-      content: [
-        {
-          type: "text",
-          text: `Error processing request: ${error.message || error}`,
-        },
-      ],
+      content: [{ type: "text", text: `Error processing request: ${errMsg}` }],
       isError: true,
     };
   }
