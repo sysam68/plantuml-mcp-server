@@ -472,12 +472,11 @@ if (wasCalledAsScript()) {
       app.post("/tools/:toolName/invoke", async (req, res) => {
         const tool = req.params.toolName;
         try {
-          const response = await server
-            .getServer()
-            .handleRequest({
-              method: "tools/call",
-              params: { name: tool, arguments: req.body?.input || {} },
-            });
+          // 👇 Cast pour contourner le typage manquant dans le SDK MCP
+          const response = await (server.getServer() as any).handleRequest({
+            method: "tools/call",
+            params: { name: tool, arguments: req.body?.input || {} },
+          });
           res.json(response);
         } catch (err: any) {
           console.error("❌ Tool error:", err);
