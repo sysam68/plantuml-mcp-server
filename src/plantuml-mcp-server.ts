@@ -477,7 +477,11 @@ if (wasCalledAsScript()) {
             return;
           }
 
-          const response = await (server.getServer() as any).handleRequest(request);
+          // Directly call server.handleRequest, with a function check
+          if (!server || typeof (server as any).handleRequest !== "function") {
+            throw new Error("MCP server instance not initialized properly");
+          }
+          const response = await (server as any).handleRequest(request);
           res.json(response || { jsonrpc: "2.0", id: request.id, result: {} });
         } catch (err: any) {
           console.error("❌ MCP endpoint error:", err);
