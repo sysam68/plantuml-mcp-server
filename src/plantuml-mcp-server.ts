@@ -449,13 +449,12 @@ if (wasCalledAsScript()) {
       console.log(`🌐 Starting PlantUML MCP HTTP server on port ${port}`);
 
       // MCP Metadata endpoint (discovery)
-      // MCP Metadata endpoint (discovery)
       app.get("/.well-known/mcp/server-metadata", (req, res) => {
         res.json({
           name: "plantuml-server",
           version: "0.1.0",
           description: "HTTP-compatible MCP server for PlantUML diagrams",
-          transport: "http",
+          transport: "http"
         });
       });
 
@@ -464,14 +463,23 @@ if (wasCalledAsScript()) {
         try {
           const request =
             req.method === "GET"
-              ? { jsonrpc: "2.0", id: Date.now().toString(), method: "tools/list", params: {} }
+              ? {
+                  jsonrpc: "2.0",
+                  id: Date.now().toString(),
+                  method: "tools/list",
+                  params: {}
+                }
               : req.body;
 
           const response = await (server.getServer() as any).handleRequest(request);
           res.json(response);
         } catch (err: any) {
           console.error("❌ MCP endpoint error:", err);
-          res.status(500).json({ jsonrpc: "2.0", id: null, error: { message: err.message } });
+          res.status(500).json({
+            jsonrpc: "2.0",
+            id: null,
+            error: { message: err.message }
+          });
         }
       });
 
@@ -483,7 +491,10 @@ if (wasCalledAsScript()) {
             jsonrpc: "2.0",
             id: Date.now().toString(),
             method: "tools/call",
-            params: { name: tool, arguments: req.body?.input || {} },
+            params: {
+              name: tool,
+              arguments: req.body?.input || {}
+            }
           });
           res.json(response);
         } catch (err: any) {
