@@ -234,6 +234,7 @@ async function handleMCPRequest(request: any) {
     // --- Prompts management ---
     case "prompts/list":
       log("debug", `Processing 'prompts/list' request with id: ${id}`);
+      // Flowise compatibility: support call with no params
       return { jsonrpc: "2.0", id, result: { prompts: PROMPTS } };
 
     case "prompts/get":
@@ -363,7 +364,7 @@ app.get("/sse", (req, res) => {
   res.write(`: connected\n\n`);
 
   // Send notifications/initialized event
-  res.write(`event: message\ndata: ${JSON.stringify({
+  const initializedPayload = {
     jsonrpc: "2.0",
     method: "notifications/initialized",
     params: {
@@ -372,24 +373,49 @@ app.get("/sse", (req, res) => {
         prompts: PROMPTS.map(p => p.name),
       }
     }
-  })}\n\n`);
-  log("info", `Sent notifications/initialized to sessionId=${sessionId}`);
+  };
+  res.write(`event: message\ndata: ${JSON.stringify(initializedPayload)}\n\n`);
+  log("debug", `Sent notifications/initialized to sessionId=${sessionId}`);
 
   // Send tools/list event (so client can populate tools)
-  res.write(`event: message\ndata: ${JSON.stringify({
+  const toolsListPayload = {
     jsonrpc: "2.0",
     method: "tools/list",
     params: { tools: TOOLS }
-  })}\n\n`);
-  log("info", `Sent tools/list to sessionId=${sessionId}`);
+  };
+  res.write(`event: message\ndata: ${JSON.stringify(toolsListPayload)}\n\n`);
+  log("debug", `Sent tools/list to sessionId=${sessionId}`);
 
+  // Send prompts/list event (auto, after ready)
   // Send notifications/ready event
-  res.write(`event: message\ndata: ${JSON.stringify({
+  const readyPayload = {
     jsonrpc: "2.0",
     method: "notifications/ready",
     params: {}
-  })}\n\n`);
-  log("info", `Sent notifications/ready to sessionId=${sessionId}`);
+  };
+  res.write(`event: message\ndata: ${JSON.stringify(readyPayload)}\n\n`);
+  log("debug", `Sent notifications/ready to sessionId=${sessionId}`);
+
+  // After ready, send tools/list and prompts/list as full JSON-RPC with id
+  // (auto, as requested)
+  const toolsListRpcId = uuidv4();
+  const promptsListRpcId = uuidv4();
+  const toolsListRpc = {
+    jsonrpc: "2.0",
+    id: toolsListRpcId,
+    method: "tools/list",
+    params: {}
+  };
+  res.write(`event: message\ndata: ${JSON.stringify(toolsListRpc)}\n\n`);
+  log("debug", `Sent tools/list (JSON-RPC) to sessionId=${sessionId} with id=${toolsListRpcId}`);
+  const promptsListRpc = {
+    jsonrpc: "2.0",
+    id: promptsListRpcId,
+    method: "prompts/list",
+    params: {}
+  };
+  res.write(`event: message\ndata: ${JSON.stringify(promptsListRpc)}\n\n`);
+  log("debug", `Sent prompts/list (JSON-RPC) to sessionId=${sessionId} with id=${promptsListRpcId}`);
 
   // Heartbeat every 30s
   const heartbeat = setInterval(() => {
@@ -417,8 +443,8 @@ function sendSSEMessage(message: any) {
     try {
       res.write(`event: message\ndata: ${data}\n\n`);
       log("debug", `SSE message sent to sessionId: ${sessionId}`);
-    } catch (err) {
-      log("warn", `Failed to send SSE message to sessionId: ${sessionId}`, err);
+    } catch (err: any) {
+      log("error", `Failed to send SSE message to sessionId: ${sessionId}: ${err?.message || err}`);
     }
   }
 }
@@ -470,4 +496,5 @@ app.post("/mcp", async (req, res) => {
 app.listen(SERVER_PORT, () => {
   log("info", `✅ MCP PlantUML server running on http://localhost:${SERVER_PORT}`);
   log("info", `✅ MCP SSE endpoint available at http://localhost:${SERVER_PORT}/sse`);
+  log("debug", `Current LOG_LEVEL: ${LOG_LEVEL}`);
 });
