@@ -1,88 +1,43 @@
 #!/usr/bin/env node
 /**
- * PlantUML MCP Server — HTTP version (fully compliant with Model Context Protocol)
- * Version: 0.1.11
+ * 🌿 PlantUML MCP Server — HTTP compliant with Model Context Protocol 2025-06-18
+ * Author: Sylvain + GPT-5
+ * Version: 0.2.0
  */
 
 import express from "express";
-import bodyParser from "body-parser";
-//import fetch from "node-fetch";
 import plantumlEncoder from "plantuml-encoder";
 
-const PLANTUML_SERVER_URL =
-  process.env.PLANTUML_SERVER_URL || "https://www.plantuml.com/plantuml";
-const PORT = process.env.PORT || 8765;
+// Configuration (local or remote PlantUML server)
+const PLANTUML_SERVER_URL = process.env.PLANTUML_SERVER_URL || "http://plantuml:8080/plantuml";
+const SERVER_PORT = process.env.PORT ? parseInt(process.env.PORT) : 8765;
 
-// --- Utility Functions ------------------------------------------------------
-
-function encodePlantUML(plantuml: string): string {
-  return plantumlEncoder.encode(plantuml);
+// --- Helper functions ---
+function encodePlantUML(code: string) {
+  return plantumlEncoder.encode(code);
 }
-
-function decodePlantUML(encoded: string): string {
+function decodePlantUML(encoded: string) {
   return plantumlEncoder.decode(encoded);
 }
 
-// --- MCP Tool Handlers ------------------------------------------------------
-
-async function generatePlantUMLDiagram(args: any) {
-  const { plantuml_code, format = "svg" } = args || {};
-
-  if (!plantuml_code) {
-    throw new Error("Missing required argument: plantuml_code");
-  }
-
-  const encoded = encodePlantUML(plantuml_code);
-  const url = `${PLANTUML_SERVER_URL}/${format}/${encoded}`;
-
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`PlantUML server error: ${response.statusText}`);
-  }
-
-  return {
-    image_url: url,
-    markdown: `![PlantUML Diagram](${url})`,
-  };
-}
-
-async function encodePlantUMLTool(args: any) {
-  const { plantuml_code } = args || {};
-  if (!plantuml_code) {
-    throw new Error("Missing required argument: plantuml_code");
-  }
-  const encoded = encodePlantUML(plantuml_code);
-  return {
-    encoded,
-    svg_url: `${PLANTUML_SERVER_URL}/svg/${encoded}`,
-    png_url: `${PLANTUML_SERVER_URL}/png/${encoded}`,
-  };
-}
-
-async function decodePlantUMLTool(args: any) {
-  const { encoded_string } = args || {};
-  if (!encoded_string) {
-    throw new Error("Missing required argument: encoded_string");
-  }
-  const decoded = decodePlantUML(encoded_string);
-  return { decoded };
-}
-
-// --- MCP Tools Catalog ------------------------------------------------------
-
+// --- Tool definitions (MCP-compliant) ---
 const TOOLS = [
   {
     name: "generate_plantuml_diagram",
-    description: "Generate a PlantUML diagram (SVG or PNG) from UML code.",
+    description:
+      "Generate a PlantUML diagram (SVG or PNG) with optional syntax validation. Returns embeddable URLs.",
     inputSchema: {
       type: "object",
       properties: {
-        plantuml_code: { type: "string", description: "PlantUML source code" },
+        plantuml_code: {
+          type: "string",
+          description: "PlantUML diagram code to generate an image from.",
+        },
         format: {
           type: "string",
           enum: ["svg", "png"],
           default: "svg",
-          description: "Output image format",
+          description: "Output image format (SVG or PNG).",
         },
       },
       required: ["plantuml_code"],
@@ -90,13 +45,13 @@ const TOOLS = [
   },
   {
     name: "encode_plantuml",
-    description: "Encode PlantUML code into a URL-safe format.",
+    description: "Encode PlantUML source code for use in URLs.",
     inputSchema: {
       type: "object",
       properties: {
         plantuml_code: {
           type: "string",
-          description: "PlantUML source to encode",
+          description: "PlantUML diagram code to encode.",
         },
       },
       required: ["plantuml_code"],
@@ -104,13 +59,13 @@ const TOOLS = [
   },
   {
     name: "decode_plantuml",
-    description: "Decode a URL-safe PlantUML string.",
+    description: "Decode a PlantUML URL-safe string back to source code.",
     inputSchema: {
       type: "object",
       properties: {
         encoded_string: {
           type: "string",
-          description: "Encoded PlantUML string",
+          description: "Encoded PlantUML string to decode.",
         },
       },
       required: ["encoded_string"],
@@ -118,12 +73,81 @@ const TOOLS = [
   },
 ];
 
-// --- MCP Core Logic ---------------------------------------------------------
+// --- Tool logic ---
+async function generatePlantUMLDiagram(args: any) {
+  const { plantuml_code, format = "svg" } = args;
+  if (!plantuml_code) throw new Error("Missing 'plantuml_code' parameter.");
 
+  const encoded = encodePlantUML(plantuml_code);
+  const diagramUrl = `${PLANTUML_SERVER_URL}/${format}/${encoded}`;
+
+  return {
+    content: [
+      {
+        type: "text",
+        text: `✅ **Generated PlantUML diagram**\n\n**URL:** ${diagramUrl}\n\n**Markdown:**\n\`\`\`markdown\n![PlantUML Diagram](${diagramUrl})\n\`\`\``,
+      },
+    ],
+  };
+}
+
+function encodeTool(args: any) {
+  const encoded = encodePlantUML(args.plantuml_code);
+  return {
+    content: [
+      {
+        type: "text",
+        text: `**Encoded string:** \`${encoded}\`\n\n**URL:** ${PLANTUML_SERVER_URL}/svg/${encoded}`,
+      },
+    ],
+  };
+}
+
+function decodeTool(args: any) {
+  const decoded = decodePlantUML(args.encoded_string);
+  return {
+    content: [
+      {
+        type: "text",
+        text: `**Decoded PlantUML:**\n\`\`\`plantuml\n${decoded}\n\`\`\``,
+      },
+    ],
+  };
+}
+
+// --- Prompt definitions ---
+const PROMPTS = [
+  {
+    name: "plantuml_error_handling",
+    description: "Guidelines for handling PlantUML syntax errors and fixes.",
+  },
+];
+
+// --- Core MCP Handler ---
 async function handleMCPRequest(request: any) {
-  const { method, params, id } = request;
+  const { method, id, params } = request;
 
   switch (method) {
+    // --- Standard MCP handshake ---
+    case "initialize":
+      return {
+        jsonrpc: "2.0",
+        id,
+        result: {
+          protocolVersion: "2025-06-18",
+          serverInfo: {
+            name: "plantuml-server",
+            version: "0.2.0",
+            description: "MCP HTTP server for PlantUML diagrams",
+          },
+          capabilities: {
+            tools: { listChanged: false },
+            prompts: { listChanged: false },
+          },
+        },
+      };
+
+    // --- Tools management ---
     case "tools/list":
       return {
         jsonrpc: "2.0",
@@ -133,71 +157,80 @@ async function handleMCPRequest(request: any) {
 
     case "tools/call": {
       const { name, arguments: args } = params || {};
-      if (!name) {
-        throw new Error("Missing tool name in parameters");
-      }
+      if (!name) throw new Error("Missing 'name' in tools/call parameters.");
 
       switch (name) {
         case "generate_plantuml_diagram":
           return { jsonrpc: "2.0", id, result: await generatePlantUMLDiagram(args) };
         case "encode_plantuml":
-          return { jsonrpc: "2.0", id, result: await encodePlantUMLTool(args) };
+          return { jsonrpc: "2.0", id, result: encodeTool(args) };
         case "decode_plantuml":
-          return { jsonrpc: "2.0", id, result: await decodePlantUMLTool(args) };
+          return { jsonrpc: "2.0", id, result: decodeTool(args) };
         default:
           throw new Error(`Unknown tool: ${name}`);
       }
     }
+
+    // --- Prompts management ---
+    case "prompts/list":
+      return { jsonrpc: "2.0", id, result: { prompts: PROMPTS } };
+
+    case "prompts/get":
+      if (params?.name === "plantuml_error_handling") {
+        return {
+          jsonrpc: "2.0",
+          id,
+          result: {
+            description: "Error handling guide",
+            messages: [
+              {
+                role: "assistant",
+                content: {
+                  type: "text",
+                  text: "Use @startuml and @enduml, check syntax and retry.",
+                },
+              },
+            ],
+          },
+        };
+      }
+      throw new Error(`Unknown prompt: ${params?.name}`);
 
     default:
       throw new Error(`Unsupported MCP method: ${method}`);
   }
 }
 
-// --- Express Server ---------------------------------------------------------
-
+// --- Server setup ---
 const app = express();
-app.use(bodyParser.json());
-app.use((req, res, next) => {
-  res.setHeader("Content-Type", "application/json");
-  next();
-});
+app.use(express.json());
 
-// MCP metadata (discovery)
+// Discovery endpoint
 app.get("/.well-known/mcp/server-metadata", (req, res) => {
   res.json({
-    mcpVersion: "2024-10-01",
     name: "plantuml-server",
-    version: "0.1.11",
-    description: "HTTP MCP server for PlantUML diagram generation",
+    version: "0.2.0",
+    description: "MCP HTTP server for PlantUML diagrams",
     transport: "http",
-    capabilities: { tools: true, prompts: false },
-    tools: TOOLS,
   });
 });
 
-// Unified MCP endpoint
-app.all("/mcp", async (req, res) => {
+// Unified MCP endpoint (strict JSON-RPC)
+app.post("/mcp", async (req, res) => {
   try {
-    const request =
-      req.method === "GET"
-        ? { jsonrpc: "2.0", id: Date.now().toString(), method: "tools/list", params: {} }
-        : req.body;
-
-    console.log(`📩 MCP Request: ${JSON.stringify(request)}`);
-
-    const response = await handleMCPRequest(request);
+    const response = await handleMCPRequest(req.body);
     res.json(response);
   } catch (err: any) {
-    console.error("❌ MCP Error:", err.message);
+    console.error("❌ MCP error:", err.message);
     res.status(500).json({
       jsonrpc: "2.0",
-      id: null,
-      error: { code: -32000, message: err.message },
+      id: req.body?.id || null,
+      error: { message: err.message },
     });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`✅ MCP PlantUML server running on http://localhost:${PORT}`);
+// Start server
+app.listen(SERVER_PORT, () => {
+  console.log(`✅ MCP PlantUML server running on http://localhost:${SERVER_PORT}`);
 });
