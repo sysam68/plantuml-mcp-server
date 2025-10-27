@@ -230,7 +230,7 @@ app.post("/mcp", async (req, res) => {
       const tools = (response as any)?.result?.tools || (response as any)?.tools;
       return res.json({
         jsonrpc: "2.0",
-        id: req.body.id,
+        id: String(req.body.id || "1"),
         result: { tools: tools || [] },
       });
     }
@@ -238,7 +238,7 @@ app.post("/mcp", async (req, res) => {
       const prompts = (response as any)?.result?.prompts || (response as any)?.prompts;
       return res.json({
         jsonrpc: "2.0",
-        id: req.body.id,
+        id: String(req.body.id || "1"),
         result: { prompts: prompts || [] },
       });
     }
@@ -247,8 +247,8 @@ app.post("/mcp", async (req, res) => {
     res.json(response);
   } catch (err: any) {
     console.error("❌ MCP error:", err.message);
-    // Always return JSON-RPC error envelope, with id defaulted to 1 if missing
-    const id = typeof req.body?.id === "undefined" || req.body?.id === null ? 1 : req.body.id;
+    // Always return JSON-RPC error envelope, with id defaulted to 1 if missing, and as string
+    const id = String(req.body?.id || "1");
     res.status(500).json({
       jsonrpc: "2.0",
       id,
