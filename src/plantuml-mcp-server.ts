@@ -21,6 +21,15 @@ import express from "express";
 import plantumlEncoder from "plantuml-encoder";
 import { v4 as uuidv4 } from "uuid";
 
+const LOG_LEVEL = process.env.LOG_LEVEL || "info";
+const LEVELS = { error: 0, warn: 1, info: 2, debug: 3 };
+function log(level: keyof typeof LEVELS, message: string, ...args: any[]) {
+  if (LEVELS[level] <= LEVELS[LOG_LEVEL]) {
+    const ts = new Date().toISOString();
+    console.log(`[${ts}] [${level.toUpperCase()}] ${message}`, ...args);
+  }
+}
+
 // Configuration (local or remote PlantUML server)
 const PLANTUML_SERVER_URL = process.env.PLANTUML_SERVER_URL || "http://plantuml:8080/plantuml";
 const SERVER_PORT = process.env.PORT ? parseInt(process.env.PORT) : 8765;
@@ -142,6 +151,7 @@ const sessions = new Map<string, { res: express.Response }>();
 // --- Core MCP Handler ---
 async function handleMCPRequest(request: any) {
   const { method, id, params } = request;
+  log("debug", `handleMCPRequest called with method: ${method}`, { id, params });
 
   switch (method) {
     // --- Standard MCP handshake ---
@@ -302,8 +312,36 @@ app.get("/sse", (req, res) => {
   // Send initial comment to keep connection alive in some proxies
   res.write(`: connected\n\n`);
 
+  // Send MCP initialize message automatically
+  const initMessage = {
+    jsonrpc: "2.0",
+    id: "init",
+    result: {
+      protocolVersion: "2025-06-18",
+      serverInfo: {
+        name: "plantuml-server",
+        version: "0.2.0",
+        description: "MCP SSE & HTTP server for PlantUML diagrams"
+      },
+      capabilities: {
+        tools: { listChanged: false },
+        prompts: { listChanged: false }
+      }
+    }
+  };
+  res.write(`data: ${JSON.stringify(initMessage)}\n\n`);
+
+  // Send initial tools list so Flowise can populate the UI
+  const toolsList = {
+    jsonrpc: "2.0",
+    id: "tools-1",
+    result: { tools: TOOLS }
+  };
+  res.write(`data: ${JSON.stringify(toolsList)}\n\n`);
+
   // Store session
   sessions.set(sessionId, { res });
+  log("debug", "New SSE session created", sessionId);
 
   // Heartbeat every 30 seconds to keep connection alive
   const heartbeat = setInterval(() => {
@@ -314,11 +352,13 @@ app.get("/sse", (req, res) => {
   req.on("close", () => {
     clearInterval(heartbeat);
     sessions.delete(sessionId);
+    log("debug", "SSE session closed and removed", sessionId);
   });
 });
 
 // Function to send JSON-RPC response via SSE to all active sessions
 function sendSSEMessage(message: any) {
+  log("debug", "Sending SSE message", message);
   const data = JSON.stringify(message);
   for (const [, { res }] of sessions) {
     res.write(`data: ${data}\n\n`);
@@ -334,8 +374,10 @@ app.post("/mcp", async (req, res) => {
     }
 
     const request = req.body;
+    log("debug", "Received MCP request", request);
 
     const response = await handleMCPRequest(request);
+    log("debug", "MCP response ready", response);
 
     // If the request contains a sessionId param and that session exists, send via SSE and respond 204
     if (request.params?.sessionId && sessions.has(request.params.sessionId)) {
@@ -365,7 +407,7 @@ app.post("/mcp", async (req, res) => {
     // --- Normal MCP response ---
     res.json(response);
   } catch (err: any) {
-    console.error("❌ MCP error:", err.message);
+    log("error", "❌ MCP error:", err.message);
     // Always return JSON-RPC error envelope, with id defaulted to 1 if missing, and as string
     const id = String(req.body?.id || "1");
     res.status(500).json({
@@ -378,6 +420,6 @@ app.post("/mcp", async (req, res) => {
 
 // Start server
 app.listen(SERVER_PORT, () => {
-  console.log(`✅ MCP PlantUML server running on http://localhost:${SERVER_PORT}`);
-  console.log(`✅ MCP SSE endpoint available at http://localhost:${SERVER_PORT}/sse`);
+  log("info", `✅ MCP PlantUML server running on http://localhost:${SERVER_PORT}`);
+  log("info", `✅ MCP SSE endpoint available at http://localhost:${SERVER_PORT}/sse`);
 });
