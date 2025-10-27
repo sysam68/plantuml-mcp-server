@@ -464,7 +464,6 @@ if (wasCalledAsScript()) {
           let request;
 
           if (req.method === "GET") {
-            // Return list of tools if GET request
             request = {
               jsonrpc: "2.0",
               id: Date.now().toString(),
@@ -513,9 +512,10 @@ if (wasCalledAsScript()) {
       app.listen(port, () => {
         console.log(`✅ PlantUML MCP HTTP server listening at http://localhost:${port}`);
       });
+    }); // close import("express").then(...)
   } else {
     // --- Default STDIO mode ---
     const server = new PlantUMLMCPServer();
     server.run().catch(console.error);
   }
-}
+} // close if (wasCalledAsScript())
