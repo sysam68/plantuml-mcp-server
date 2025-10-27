@@ -218,10 +218,10 @@ app.get("/.well-known/mcp/server-metadata", (req, res) => {
 // Unified MCP endpoint (strict JSON-RPC)
 app.post("/mcp", async (req, res) => {
   try {
-    const response = await (server.getServer() as any).handleRequest(request);
+    const response = await handleMCPRequest(req.body);
 
     // Flowise expects top-level "tools" field, not wrapped in JSON-RPC "result"
-    if (request.method === "tools/list" && response?.result?.tools) {
+    if (req.body.method === "tools/list" && response?.result?.tools) {
       res.json({ tools: response.result.tools });
     } else {
       res.json(response);
