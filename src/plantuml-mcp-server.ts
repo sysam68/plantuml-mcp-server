@@ -205,6 +205,24 @@ async function handleMCPRequest(request: any) {
 const app = express();
 app.use(express.json());
 
+// Optional API key middleware
+app.use((req, res, next) => {
+  const expectedKey = process.env.MCP_API_KEY;
+  if (!expectedKey) return next();
+  const authHeader = req.headers['authorization'];
+  const valid = authHeader === `Bearer ${expectedKey}`;
+  if (!valid) {
+    const id = req.body?.id || "1";
+    res.status(401).json({
+      jsonrpc: "2.0",
+      id,
+      error: { message: "Unauthorized: invalid or missing API key" }
+    });
+    return;
+  }
+  next();
+});
+
 // Discovery endpoint
 app.get("/.well-known/mcp/server-metadata", (req, res) => {
   res.json({
