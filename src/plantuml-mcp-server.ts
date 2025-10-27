@@ -221,8 +221,16 @@ app.post("/mcp", async (req, res) => {
     const response = await handleMCPRequest(req.body);
 
     // Flowise expects top-level "tools" field, not wrapped in JSON-RPC "result"
-    if (req.body.method === "tools/list" && response?.result?.tools) {
-      res.json({ tools: response.result.tools });
+    if (
+      req.body.method === "tools/list" &&
+      typeof response === "object" &&
+      response !== null &&
+      "result" in response &&
+      typeof (response as any).result === "object" &&
+      (response as any).result !== null &&
+      "tools" in (response as any).result
+    ) {
+      res.json({ tools: (response as any).result.tools });
     } else {
       res.json(response);
     }
