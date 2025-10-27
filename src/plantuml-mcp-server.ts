@@ -6,7 +6,7 @@
 
 import express from "express";
 import bodyParser from "body-parser";
-import fetch from "node-fetch";
+//import fetch from "node-fetch";
 import plantumlEncoder from "plantuml-encoder";
 
 const PLANTUML_SERVER_URL =
