@@ -11,8 +11,7 @@
  *
  * SSE stream management:
  * - Each client connection is stored in a sessions map keyed by a unique session ID.
- * - Incoming MCP requests over HTTP (/mcp) respond normally.
- * - MCP requests over SSE (/sse) are handled and results are sent as SSE events.
+ * - Incoming MCP requests over HTTP (/mcp) respond normally or send results via SSE if requested.
  * - When a client disconnects, the session is cleaned up.
  *
  * This design ensures compatibility with Flowise and other MCP clients expecting JSON-RPC over HTTP or SSE.
@@ -222,13 +221,21 @@ async function handleMCPRequest(request: any) {
 const app = express();
 app.use(express.json());
 
-// Optional API key middleware for HTTP endpoints
-app.use((req, res, next) => {
-  // Skip authentication for /.well-known/mcp/server-metadata
-  if (req.path === "/.well-known/mcp/server-metadata") return next();
+// Authentication middleware for /mcp and /sse endpoints
+function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
+  // Skip authentication for /.well-known/mcp/server-metadata and /health
+  if (req.path === "/.well-known/mcp/server-metadata" || req.path === "/health") return next();
 
   const expectedKey = process.env.MCP_API_KEY;
-  if (!expectedKey) return next();
+  if (!expectedKey) {
+    // If no API key set, reject requests requiring auth
+    res.status(500).json({
+      jsonrpc: "2.0",
+      id: req.body?.id || "1",
+      error: { message: "Server misconfiguration: MCP_API_KEY not set" },
+    });
+    return;
+  }
   const authHeader = req.headers['authorization'];
   const valid = authHeader === `Bearer ${expectedKey}`;
   if (!valid) {
@@ -241,7 +248,9 @@ app.use((req, res, next) => {
     return;
   }
   next();
-});
+}
+
+app.use(authMiddleware);
 
 // Discovery endpoint with full MCP SSE metadata
 app.get("/.well-known/mcp/server-metadata", (req, res) => {
@@ -259,45 +268,9 @@ app.get("/.well-known/mcp/server-metadata", (req, res) => {
   });
 });
 
-// Unified MCP endpoint (strict JSON-RPC) - HTTP classic
-app.post("/mcp", async (req, res) => {
-  try {
-    // Compatibility safeguard: ensure id is present and default to 1 if missing
-    if (typeof req.body?.id === "undefined" || req.body?.id === null) {
-      req.body.id = 1;
-    }
-    const response = await handleMCPRequest(req.body);
-
-    // --- Always wrap tools/list and prompts/list in JSON-RPC envelope as Flowise expects ---
-    if (req.body.method === "tools/list") {
-      const tools = (response as any)?.result?.tools || (response as any)?.tools;
-      return res.json({
-        jsonrpc: "2.0",
-        id: String(req.body.id || "1"),
-        result: { tools: tools || [] },
-      });
-    }
-    if (req.body.method === "prompts/list") {
-      const prompts = (response as any)?.result?.prompts || (response as any)?.prompts;
-      return res.json({
-        jsonrpc: "2.0",
-        id: String(req.body.id || "1"),
-        result: { prompts: prompts || [] },
-      });
-    }
-
-    // --- Normal MCP response ---
-    res.json(response);
-  } catch (err: any) {
-    console.error("❌ MCP error:", err.message);
-    // Always return JSON-RPC error envelope, with id defaulted to 1 if missing, and as string
-    const id = String(req.body?.id || "1");
-    res.status(500).json({
-      jsonrpc: "2.0",
-      id,
-      error: { message: err.message },
-    });
-  }
+// Healthcheck endpoint for Docker
+app.get("/health", (req, res) => {
+  res.status(200).send("OK");
 });
 
 // MCP SSE endpoint
@@ -352,45 +325,39 @@ function sendSSEMessage(message: any) {
   }
 }
 
-// Wrap handleMCPRequest to optionally send via SSE if session active
-async function handleMCPRequestWithSSE(request: any) {
-  const response = await handleMCPRequest(request);
-  // If the request contains a sessionId param and that session exists, send via SSE
-  if (request.params?.sessionId && sessions.has(request.params.sessionId)) {
-    sendSSEMessage(response);
-    return null; // Indicate response sent via SSE
-  }
-  return response;
-}
-
-// Overwrite /mcp POST handler to support optional sessionId param for SSE
+// Unified MCP endpoint (strict JSON-RPC) - HTTP classic or SSE if sessionId provided
 app.post("/mcp", async (req, res) => {
   try {
+    // Compatibility safeguard: ensure id is present and default to 1 if missing
     if (typeof req.body?.id === "undefined" || req.body?.id === null) {
       req.body.id = 1;
     }
-    const response = await handleMCPRequestWithSSE(req.body);
 
-    if (response === null) {
-      // Response was sent via SSE, so just end HTTP response with 204 No Content
+    const request = req.body;
+
+    const response = await handleMCPRequest(request);
+
+    // If the request contains a sessionId param and that session exists, send via SSE and respond 204
+    if (request.params?.sessionId && sessions.has(request.params.sessionId)) {
+      sendSSEMessage(response);
       res.status(204).end();
       return;
     }
 
     // --- Always wrap tools/list and prompts/list in JSON-RPC envelope as Flowise expects ---
-    if (req.body.method === "tools/list") {
+    if (request.method === "tools/list") {
       const tools = (response as any)?.result?.tools || (response as any)?.tools;
       return res.json({
         jsonrpc: "2.0",
-        id: String(req.body.id || "1"),
+        id: String(request.id || "1"),
         result: { tools: tools || [] },
       });
     }
-    if (req.body.method === "prompts/list") {
+    if (request.method === "prompts/list") {
       const prompts = (response as any)?.result?.prompts || (response as any)?.prompts;
       return res.json({
         jsonrpc: "2.0",
-        id: String(req.body.id || "1"),
+        id: String(request.id || "1"),
         result: { prompts: prompts || [] },
       });
     }
@@ -399,6 +366,7 @@ app.post("/mcp", async (req, res) => {
     res.json(response);
   } catch (err: any) {
     console.error("❌ MCP error:", err.message);
+    // Always return JSON-RPC error envelope, with id defaulted to 1 if missing, and as string
     const id = String(req.body?.id || "1");
     res.status(500).json({
       jsonrpc: "2.0",
