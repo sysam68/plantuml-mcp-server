@@ -29,8 +29,8 @@ class PlantUMLMCPServer {
       name: 'plantuml-server',
       version: '0.1.0',
       capabilities: {
-        tools: {},
-        prompts: {},
+        tools: { listChanged: false },
+        prompts: { listChanged: false },
       },
     });
 
@@ -39,58 +39,59 @@ class PlantUMLMCPServer {
   }
 
   private setupToolHandlers() {
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: [
+    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+      const tools = [
         {
           name: 'generate_plantuml_diagram',
-          description: 'Generate a PlantUML diagram with automatic syntax validation and error reporting for auto-fix workflows. Returns embeddable image URLs for valid diagrams or structured error details for invalid syntax that can be automatically corrected.',
+          description: 'Generate a PlantUML diagram with syntax validation and structured error output.',
           inputSchema: {
             type: 'object',
             properties: {
               plantuml_code: {
                 type: 'string',
-                description: 'PlantUML diagram code. Will be automatically validated for syntax errors before generating the diagram URL.',
+                description: 'PlantUML diagram code to generate an image from.'
               },
               format: {
                 type: 'string',
                 enum: ['svg', 'png'],
                 default: 'svg',
-                description: 'Output image format (SVG or PNG)',
-              },
+                description: 'Output image format (SVG or PNG).'
+              }
             },
-            required: ['plantuml_code'],
-          },
+            required: ['plantuml_code']
+          }
         },
         {
           name: 'encode_plantuml',
-          description: 'Encode PlantUML code for URL usage',
+          description: 'Encode PlantUML diagram code into a URL-safe string.',
           inputSchema: {
             type: 'object',
             properties: {
               plantuml_code: {
                 type: 'string',
-                description: 'PlantUML diagram code to encode',
-              },
+                description: 'PlantUML diagram code to encode.'
+              }
             },
-            required: ['plantuml_code'],
-          },
+            required: ['plantuml_code']
+          }
         },
         {
           name: 'decode_plantuml',
-          description: 'Decode encoded PlantUML string back to PlantUML code',
+          description: 'Decode an encoded PlantUML string back into PlantUML code.',
           inputSchema: {
             type: 'object',
             properties: {
               encoded_string: {
                 type: 'string',
-                description: 'Encoded PlantUML string to decode',
-              },
+                description: 'Encoded PlantUML string to decode.'
+              }
             },
-            required: ['encoded_string'],
-          },
-        },
-      ],
-    }));
+            required: ['encoded_string']
+          }
+        }
+      ];
+      return { jsonrpc: '2.0', id: Date.now().toString(), result: { tools } };
+    });
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       switch (request.params.name) {
@@ -447,7 +448,7 @@ if (wasCalledAsScript()) {
 
       console.log(`🌐 Starting PlantUML MCP HTTP server on port ${port}`);
 
-      // MCP Metadata endpoint
+      // MCP Metadata endpoint (discovery)
       app.get("/.well-known/mcp/server-metadata", (req, res) => {
         res.json({
           name: "plantuml-server",
@@ -457,23 +458,40 @@ if (wasCalledAsScript()) {
         });
       });
 
-      // List tools
-      app.get("/tools", (req, res) => {
-        res.json({
-          tools: [
-            { name: "generate_plantuml_diagram" },
-            { name: "encode_plantuml" },
-            { name: "decode_plantuml" },
-          ],
-        });
+      // Unified MCP endpoint for discovery (GET) and tool invocation (POST)
+      app.all("/mcp", async (req, res) => {
+        try {
+          const request =
+            req.method === "GET"
+              ? {
+                  jsonrpc: "2.0",
+                  id: Date.now().toString(),
+                  method: "tools/list",
+                  params: {},
+                }
+              : req.body;
+
+          const response = await (server.getServer() as any).handleRequest(request);
+          res.json(response);
+        } catch (err: any) {
+          console.error("❌ MCP endpoint error:", err);
+          res
+            .status(500)
+            .json({
+              jsonrpc: "2.0",
+              id: null,
+              error: { message: err.message },
+            });
+        }
       });
 
-      // Invoke a tool
+      // Optional legacy fallback for direct tool invocation
       app.post("/tools/:toolName/invoke", async (req, res) => {
         const tool = req.params.toolName;
         try {
-          // 👇 Cast pour contourner le typage manquant dans le SDK MCP
           const response = await (server.getServer() as any).handleRequest({
+            jsonrpc: "2.0",
+            id: Date.now().toString(),
             method: "tools/call",
             params: { name: tool, arguments: req.body?.input || {} },
           });
