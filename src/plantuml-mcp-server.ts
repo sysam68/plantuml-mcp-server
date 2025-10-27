@@ -219,25 +219,39 @@ app.get("/.well-known/mcp/server-metadata", (req, res) => {
 // Unified MCP endpoint (strict JSON-RPC + Flowise compatibility)
 app.post("/mcp", async (req, res) => {
   try {
+    // Compatibility safeguard: ensure id is present and default to 1 if missing
+    if (typeof req.body?.id === "undefined" || req.body?.id === null) {
+      req.body.id = 1;
+    }
     const response = await handleMCPRequest(req.body);
 
-    // --- Normalize MCP response for Flowise and spec compliance ---
+    // --- Always wrap tools/list and prompts/list in JSON-RPC envelope as Flowise expects ---
     if (req.body.method === "tools/list") {
       const tools = (response as any)?.result?.tools || (response as any)?.tools;
-      if (tools) return res.json({ tools });
+      return res.json({
+        jsonrpc: "2.0",
+        id: req.body.id,
+        result: { tools: tools || [] },
+      });
     }
     if (req.body.method === "prompts/list") {
       const prompts = (response as any)?.result?.prompts || (response as any)?.prompts;
-      if (prompts) return res.json({ prompts });
+      return res.json({
+        jsonrpc: "2.0",
+        id: req.body.id,
+        result: { prompts: prompts || [] },
+      });
     }
 
     // --- Normal MCP response ---
     res.json(response);
   } catch (err: any) {
     console.error("❌ MCP error:", err.message);
+    // Always return JSON-RPC error envelope, with id defaulted to 1 if missing
+    const id = typeof req.body?.id === "undefined" || req.body?.id === null ? 1 : req.body.id;
     res.status(500).json({
       jsonrpc: "2.0",
-      id: req.body?.id || null,
+      id,
       error: { message: err.message },
     });
   }
