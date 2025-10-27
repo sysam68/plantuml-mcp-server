@@ -51,5 +51,3 @@
     "node": ">=18.0.0"
   }
 }
-// Note: Use the LOG_LEVEL environment variable to control logging verbosity when running the server. For example:
-// LOG_LEVEL=debug node dist/plantuml-mcp-server.js or LOG_LEVEL=info npx plantuml-mcp-server
