@@ -454,36 +454,43 @@ if (wasCalledAsScript()) {
           name: "plantuml-server",
           version: "0.1.0",
           description: "HTTP-compatible MCP server for PlantUML diagrams",
-          transport: "http"
+          transport: "http",
         });
       });
 
       // Unified MCP endpoint for discovery (GET) and tool invocation (POST)
       app.all("/mcp", async (req, res) => {
         try {
-          const request =
-            req.method === "GET"
-              ? {
-                  jsonrpc: "2.0",
-                  id: Date.now().toString(),
-                  method: "tools/list",
-                  params: {}
-                }
-              : req.body;
+          let request;
+
+          if (req.method === "GET") {
+            // Return list of tools if GET request
+            request = {
+              jsonrpc: "2.0",
+              id: Date.now().toString(),
+              method: "tools/list",
+              params: {},
+            };
+          } else if (req.method === "POST") {
+            request = req.body;
+          } else {
+            res.status(405).json({ error: "Method not allowed" });
+            return;
+          }
 
           const response = await (server.getServer() as any).handleRequest(request);
-          res.json(response);
+          res.json(response || { jsonrpc: "2.0", id: request.id, result: {} });
         } catch (err: any) {
           console.error("❌ MCP endpoint error:", err);
           res.status(500).json({
             jsonrpc: "2.0",
             id: null,
-            error: { message: err.message }
+            error: { message: err.message },
           });
         }
       });
 
-      // Optional legacy fallback for direct tool invocation
+      // Legacy fallback endpoint for direct tool invocation
       app.post("/tools/:toolName/invoke", async (req, res) => {
         const tool = req.params.toolName;
         try {
@@ -493,13 +500,13 @@ if (wasCalledAsScript()) {
             method: "tools/call",
             params: {
               name: tool,
-              arguments: req.body?.input || {}
-            }
+              arguments: req.body?.input || {},
+            },
           });
-          res.json(response);
+          res.json(response || { jsonrpc: "2.0", id: null, result: {} });
         } catch (err: any) {
           console.error("❌ Tool error:", err);
-          res.status(500).json({ error: err.message });
+          res.status(500).json({ jsonrpc: "2.0", id: null, error: { message: err.message } });
         }
       });
 
