@@ -106,13 +106,17 @@ const TOOLS = [
 
 // --- Tool logic ---
 async function generatePlantUMLDiagram(args: any) {
+  log("debug", `Executing tool generate_plantuml_diagram with args`, args);
   const { plantuml_code, format = "svg" } = args;
-  if (!plantuml_code) throw new Error("Missing 'plantuml_code' parameter.");
+  if (!plantuml_code) {
+    log("error", `generate_plantuml_diagram missing 'plantuml_code' parameter`);
+    throw new Error("Missing 'plantuml_code' parameter.");
+  }
 
   const encoded = encodePlantUML(plantuml_code);
   const diagramUrl = `${PLANTUML_SERVER_URL}/${format}/${encoded}`;
 
-  return {
+  const result = {
     content: [
       {
         type: "text",
@@ -120,11 +124,14 @@ async function generatePlantUMLDiagram(args: any) {
       },
     ],
   };
+  log("debug", `Tool generate_plantuml_diagram result prepared`);
+  return result;
 }
 
 function encodeTool(args: any) {
+  log("debug", `Executing tool encode_plantuml with args`, args);
   const encoded = encodePlantUML(args.plantuml_code);
-  return {
+  const result = {
     content: [
       {
         type: "text",
@@ -132,11 +139,14 @@ function encodeTool(args: any) {
       },
     ],
   };
+  log("debug", `Tool encode_plantuml result prepared`);
+  return result;
 }
 
 function decodeTool(args: any) {
+  log("debug", `Executing tool decode_plantuml with args`, args);
   const decoded = decodePlantUML(args.encoded_string);
-  return {
+  const result = {
     content: [
       {
         type: "text",
@@ -144,6 +154,8 @@ function decodeTool(args: any) {
       },
     ],
   };
+  log("debug", `Tool decode_plantuml result prepared`);
+  return result;
 }
 
 // --- Prompt definitions ---
@@ -160,11 +172,12 @@ const sessions = new Map<string, { res: express.Response }>();
 // --- Core MCP Handler ---
 async function handleMCPRequest(request: any) {
   const { method, id, params } = request;
-  log("debug", `handleMCPRequest called with method: ${method}`, { id, params });
+  log("debug", `handleMCPRequest called with method: ${method}, id: ${id}`, { params });
 
   switch (method) {
     // --- Standard MCP handshake ---
     case "initialize":
+      log("debug", `Processing 'initialize' request with id: ${id}`);
       return {
         jsonrpc: "2.0",
         id,
@@ -184,6 +197,7 @@ async function handleMCPRequest(request: any) {
 
     // --- Tools management ---
     case "tools/list":
+      log("debug", `Processing 'tools/list' request with id: ${id}`);
       return {
         jsonrpc: "2.0",
         id,
@@ -192,25 +206,38 @@ async function handleMCPRequest(request: any) {
 
     case "tools/call": {
       const { name, arguments: args } = params || {};
-      if (!name) throw new Error("Missing 'name' in tools/call parameters.");
+      log("debug", `Processing 'tools/call' request with id: ${id}, tool: ${name}`, { args });
+      if (!name) {
+        log("error", `tools/call missing 'name' parameter`);
+        throw new Error("Missing 'name' in tools/call parameters.");
+      }
 
       switch (name) {
         case "generate_plantuml_diagram":
-          return { jsonrpc: "2.0", id, result: await generatePlantUMLDiagram(args) };
+          const genResult = await generatePlantUMLDiagram(args);
+          log("debug", `Tool 'generate_plantuml_diagram' executed successfully for id: ${id}`);
+          return { jsonrpc: "2.0", id, result: genResult };
         case "encode_plantuml":
-          return { jsonrpc: "2.0", id, result: encodeTool(args) };
+          const encResult = encodeTool(args);
+          log("debug", `Tool 'encode_plantuml' executed successfully for id: ${id}`);
+          return { jsonrpc: "2.0", id, result: encResult };
         case "decode_plantuml":
-          return { jsonrpc: "2.0", id, result: decodeTool(args) };
+          const decResult = decodeTool(args);
+          log("debug", `Tool 'decode_plantuml' executed successfully for id: ${id}`);
+          return { jsonrpc: "2.0", id, result: decResult };
         default:
+          log("error", `Unknown tool '${name}' requested in tools/call`);
           throw new Error(`Unknown tool: ${name}`);
       }
     }
 
     // --- Prompts management ---
     case "prompts/list":
+      log("debug", `Processing 'prompts/list' request with id: ${id}`);
       return { jsonrpc: "2.0", id, result: { prompts: PROMPTS } };
 
     case "prompts/get":
+      log("debug", `Processing 'prompts/get' request with id: ${id}, prompt name: ${params?.name}`);
       if (params?.name === "plantuml_error_handling") {
         return {
           jsonrpc: "2.0",
@@ -229,9 +256,11 @@ async function handleMCPRequest(request: any) {
           },
         };
       }
+      log("error", `Unknown prompt requested: ${params?.name}`);
       throw new Error(`Unknown prompt: ${params?.name}`);
 
     default:
+      log("error", `Unsupported MCP method requested: ${method}`);
       throw new Error(`Unsupported MCP method: ${method}`);
   }
 }
@@ -243,10 +272,14 @@ app.use(express.json());
 // Authentication middleware for /mcp and /sse endpoints
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
   // Skip authentication for /.well-known/mcp/server-metadata and /health
-  if (req.path === "/.well-known/mcp/server-metadata" || req.path === "/health") return next();
+  if (req.path === "/.well-known/mcp/server-metadata" || req.path === "/health") {
+    log("debug", `Skipping authentication for path: ${req.path}`);
+    return next();
+  }
 
   const expectedKey = process.env.MCP_API_KEY;
   if (!expectedKey) {
+    log("error", `Authentication failed: MCP_API_KEY not set`);
     // If no API key set, reject requests requiring auth
     res.status(500).json({
       jsonrpc: "2.0",
@@ -259,6 +292,7 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
   const valid = authHeader === `Bearer ${expectedKey}`;
   if (!valid) {
     const id = req.body?.id || "1";
+    log("warn", `Unauthorized access attempt with id: ${id}, path: ${req.path}`);
     res.status(401).json({
       jsonrpc: "2.0",
       id,
@@ -266,6 +300,7 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
     });
     return;
   }
+  log("debug", `Authentication successful for path: ${req.path}`);
   next();
 }
 
@@ -273,6 +308,7 @@ app.use(authMiddleware);
 
 // Discovery endpoint with full MCP SSE metadata
 app.get("/.well-known/mcp/server-metadata", (req, res) => {
+  log("info", `Serving server metadata to ${req.ip}`);
   res.json({
     name: "plantuml-server",
     version: "0.2.0",
@@ -289,6 +325,7 @@ app.get("/.well-known/mcp/server-metadata", (req, res) => {
 
 // Healthcheck endpoint for Docker
 app.get("/health", (req, res) => {
+  log("info", `Health check requested from ${req.ip}`);
   res.status(200).send("OK");
 });
 
@@ -296,11 +333,13 @@ app.get("/health", (req, res) => {
 app.get("/sse", (req, res) => {
   const expectedKey = process.env.MCP_API_KEY;
   if (!expectedKey) {
+    log("error", `SSE connection attempt failed: MCP_API_KEY not set`);
     res.status(500).send("Server misconfiguration: MCP_API_KEY not set");
     return;
   }
   const authHeader = req.headers['authorization'];
   if (authHeader !== `Bearer ${expectedKey}`) {
+    log("warn", `Unauthorized SSE connection attempt from ${req.ip}`);
     res.status(401).json({
       jsonrpc: "2.0",
       id: "1",
@@ -350,27 +389,33 @@ app.get("/sse", (req, res) => {
 
   // Store session
   sessions.set(sessionId, { res });
-  log("debug", "New SSE session created", sessionId);
+  log("info", `New SSE session created with sessionId: ${sessionId} from IP: ${req.ip}`);
 
   // Heartbeat every 30 seconds to keep connection alive
   const heartbeat = setInterval(() => {
     res.write(": heartbeat\n\n");
+    log("debug", `Heartbeat sent to sessionId: ${sessionId}`);
   }, 30000);
 
   // Handle client disconnect
   req.on("close", () => {
     clearInterval(heartbeat);
     sessions.delete(sessionId);
-    log("debug", "SSE session closed and removed", sessionId);
+    log("info", `SSE session closed and removed with sessionId: ${sessionId}`);
   });
 });
 
 // Function to send JSON-RPC response via SSE to all active sessions
 function sendSSEMessage(message: any) {
-  log("debug", "Sending SSE message", message);
+  log("debug", `Sending SSE message to ${sessions.size} sessions`, message);
   const data = JSON.stringify(message);
-  for (const [, { res }] of sessions) {
-    res.write(`data: ${data}\n\n`);
+  for (const [sessionId, { res }] of sessions) {
+    try {
+      res.write(`data: ${data}\n\n`);
+      log("debug", `SSE message sent to sessionId: ${sessionId}`);
+    } catch (err) {
+      log("warn", `Failed to send SSE message to sessionId: ${sessionId}`, err);
+    }
   }
 }
 
@@ -383,13 +428,14 @@ app.post("/mcp", async (req, res) => {
     }
 
     const request = req.body;
-    log("debug", "Received MCP request", request);
+    log("info", `Received MCP request with method: ${request.method}, id: ${request.id}`);
 
     const response = await handleMCPRequest(request);
-    log("debug", "MCP response ready", response);
+    log("info", `MCP response ready for id: ${request.id}`);
 
     // If the request contains a sessionId param and that session exists, send via SSE and respond 204
     if (request.params?.sessionId && sessions.has(request.params.sessionId)) {
+      log("info", `Sending MCP response via SSE to sessionId: ${request.params.sessionId}, id: ${request.id}`);
       sendSSEMessage(response);
       res.status(204).end();
       return;
@@ -398,6 +444,7 @@ app.post("/mcp", async (req, res) => {
     // --- Always wrap tools/list and prompts/list in JSON-RPC envelope as Flowise expects ---
     if (request.method === "tools/list") {
       const tools = (response as any)?.result?.tools || (response as any)?.tools;
+      log("debug", `Responding to tools/list request with id: ${request.id}`);
       return res.json({
         jsonrpc: "2.0",
         id: String(request.id || "1"),
@@ -406,6 +453,7 @@ app.post("/mcp", async (req, res) => {
     }
     if (request.method === "prompts/list") {
       const prompts = (response as any)?.result?.prompts || (response as any)?.prompts;
+      log("debug", `Responding to prompts/list request with id: ${request.id}`);
       return res.json({
         jsonrpc: "2.0",
         id: String(request.id || "1"),
@@ -416,7 +464,7 @@ app.post("/mcp", async (req, res) => {
     // --- Normal MCP response ---
     res.json(response);
   } catch (err: any) {
-    log("error", "❌ MCP error:", err.message);
+    log("error", `❌ MCP error for id: ${req.body?.id || "unknown"}:`, err.message);
     // Always return JSON-RPC error envelope, with id defaulted to 1 if missing, and as string
     const id = String(req.body?.id || "1");
     res.status(500).json({
