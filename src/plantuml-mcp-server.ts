@@ -1,12 +1,26 @@
 #!/usr/bin/env node
 /**
- * 🌿 PlantUML MCP Server — HTTP compliant with Model Context Protocol 2025-06-18
+ * 🌿 PlantUML MCP Server — MCP SSE & HTTP compliant with Model Context Protocol 2025-06-18
  * Author: Sylvain + GPT-5
  * Version: 0.2.0
+ *
+ * This server supports both classic HTTP JSON-RPC requests on /mcp and stateful MCP SSE connections on /sse.
+ *
+ * MCP SSE protocol is stateful per connection, maintaining an open Server-Sent Events (SSE) stream.
+ * Clients authenticate using a Bearer token (MCP_API_KEY) and receive JSON-RPC responses pushed asynchronously.
+ *
+ * SSE stream management:
+ * - Each client connection is stored in a sessions map keyed by a unique session ID.
+ * - Incoming MCP requests over HTTP (/mcp) respond normally.
+ * - MCP requests over SSE (/sse) are handled and results are sent as SSE events.
+ * - When a client disconnects, the session is cleaned up.
+ *
+ * This design ensures compatibility with Flowise and other MCP clients expecting JSON-RPC over HTTP or SSE.
  */
 
 import express from "express";
 import plantumlEncoder from "plantuml-encoder";
+import { v4 as uuidv4 } from "uuid";
 
 // Configuration (local or remote PlantUML server)
 const PLANTUML_SERVER_URL = process.env.PLANTUML_SERVER_URL || "http://plantuml:8080/plantuml";
@@ -123,6 +137,9 @@ const PROMPTS = [
   },
 ];
 
+// --- Sessions map for SSE connections ---
+const sessions = new Map<string, { res: express.Response }>();
+
 // --- Core MCP Handler ---
 async function handleMCPRequest(request: any) {
   const { method, id, params } = request;
@@ -138,7 +155,7 @@ async function handleMCPRequest(request: any) {
           serverInfo: {
             name: "plantuml-server",
             version: "0.2.0",
-            description: "MCP HTTP server for PlantUML diagrams",
+            description: "MCP SSE & HTTP server for PlantUML diagrams",
           },
           capabilities: {
             tools: { listChanged: false },
@@ -205,8 +222,11 @@ async function handleMCPRequest(request: any) {
 const app = express();
 app.use(express.json());
 
-// Optional API key middleware
+// Optional API key middleware for HTTP endpoints
 app.use((req, res, next) => {
+  // Skip authentication for /.well-known/mcp/server-metadata
+  if (req.path === "/.well-known/mcp/server-metadata") return next();
+
   const expectedKey = process.env.MCP_API_KEY;
   if (!expectedKey) return next();
   const authHeader = req.headers['authorization'];
@@ -223,18 +243,23 @@ app.use((req, res, next) => {
   next();
 });
 
-// Discovery endpoint
+// Discovery endpoint with full MCP SSE metadata
 app.get("/.well-known/mcp/server-metadata", (req, res) => {
   res.json({
     name: "plantuml-server",
     version: "0.2.0",
-    description: "MCP HTTP server for PlantUML diagrams",
-    transport: "http",
+    description: "MCP SSE & HTTP server for PlantUML diagrams",
+    transport: "sse",
+    protocolVersion: "2025-06-18",
+    authentication: "bearer",
+    capabilities: {
+      tools: true,
+      prompts: true,
+    },
   });
 });
 
-// Unified MCP endpoint (strict JSON-RPC)
-// Unified MCP endpoint (strict JSON-RPC + Flowise compatibility)
+// Unified MCP endpoint (strict JSON-RPC) - HTTP classic
 app.post("/mcp", async (req, res) => {
   try {
     // Compatibility safeguard: ensure id is present and default to 1 if missing
@@ -275,7 +300,116 @@ app.post("/mcp", async (req, res) => {
   }
 });
 
+// MCP SSE endpoint
+app.get("/sse", (req, res) => {
+  const expectedKey = process.env.MCP_API_KEY;
+  if (!expectedKey) {
+    res.status(500).send("Server misconfiguration: MCP_API_KEY not set");
+    return;
+  }
+  const authHeader = req.headers['authorization'];
+  if (authHeader !== `Bearer ${expectedKey}`) {
+    res.status(401).json({
+      jsonrpc: "2.0",
+      id: "1",
+      error: { message: "Unauthorized: invalid or missing API key" }
+    });
+    return;
+  }
+
+  // Set SSE headers
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders();
+
+  // Generate unique session ID
+  const sessionId = uuidv4();
+
+  // Send initial comment to keep connection alive in some proxies
+  res.write(`: connected\n\n`);
+
+  // Store session
+  sessions.set(sessionId, { res });
+
+  // Heartbeat every 30 seconds to keep connection alive
+  const heartbeat = setInterval(() => {
+    res.write(": heartbeat\n\n");
+  }, 30000);
+
+  // Handle client disconnect
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    sessions.delete(sessionId);
+  });
+});
+
+// Function to send JSON-RPC response via SSE to all active sessions
+function sendSSEMessage(message: any) {
+  const data = JSON.stringify(message);
+  for (const [, { res }] of sessions) {
+    res.write(`data: ${data}\n\n`);
+  }
+}
+
+// Wrap handleMCPRequest to optionally send via SSE if session active
+async function handleMCPRequestWithSSE(request: any) {
+  const response = await handleMCPRequest(request);
+  // If the request contains a sessionId param and that session exists, send via SSE
+  if (request.params?.sessionId && sessions.has(request.params.sessionId)) {
+    sendSSEMessage(response);
+    return null; // Indicate response sent via SSE
+  }
+  return response;
+}
+
+// Overwrite /mcp POST handler to support optional sessionId param for SSE
+app.post("/mcp", async (req, res) => {
+  try {
+    if (typeof req.body?.id === "undefined" || req.body?.id === null) {
+      req.body.id = 1;
+    }
+    const response = await handleMCPRequestWithSSE(req.body);
+
+    if (response === null) {
+      // Response was sent via SSE, so just end HTTP response with 204 No Content
+      res.status(204).end();
+      return;
+    }
+
+    // --- Always wrap tools/list and prompts/list in JSON-RPC envelope as Flowise expects ---
+    if (req.body.method === "tools/list") {
+      const tools = (response as any)?.result?.tools || (response as any)?.tools;
+      return res.json({
+        jsonrpc: "2.0",
+        id: String(req.body.id || "1"),
+        result: { tools: tools || [] },
+      });
+    }
+    if (req.body.method === "prompts/list") {
+      const prompts = (response as any)?.result?.prompts || (response as any)?.prompts;
+      return res.json({
+        jsonrpc: "2.0",
+        id: String(req.body.id || "1"),
+        result: { prompts: prompts || [] },
+      });
+    }
+
+    // --- Normal MCP response ---
+    res.json(response);
+  } catch (err: any) {
+    console.error("❌ MCP error:", err.message);
+    const id = String(req.body?.id || "1");
+    res.status(500).json({
+      jsonrpc: "2.0",
+      id,
+      error: { message: err.message },
+    });
+  }
+});
+
 // Start server
 app.listen(SERVER_PORT, () => {
   console.log(`✅ MCP PlantUML server running on http://localhost:${SERVER_PORT}`);
+  console.log(`✅ MCP SSE endpoint available at http://localhost:${SERVER_PORT}/sse`);
 });
