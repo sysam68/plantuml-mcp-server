@@ -221,12 +221,14 @@ app.post("/mcp", async (req, res) => {
   try {
     const response = await handleMCPRequest(req.body);
 
-    // --- Flatten for Flowise compatibility ---
-    if (req.body.method === "tools/list" && (response as any)?.result?.tools) {
-      return res.json({ tools: (response as any).result.tools });
+    // --- Normalize MCP response for Flowise and spec compliance ---
+    if (req.body.method === "tools/list") {
+      const tools = (response as any)?.result?.tools || (response as any)?.tools;
+      if (tools) return res.json({ tools });
     }
-    if (req.body.method === "prompts/list" && (response as any)?.result?.prompts) {
-      return res.json({ prompts: (response as any).result.prompts });
+    if (req.body.method === "prompts/list") {
+      const prompts = (response as any)?.result?.prompts || (response as any)?.prompts;
+      if (prompts) return res.json({ prompts });
     }
 
     // --- Normal MCP response ---
