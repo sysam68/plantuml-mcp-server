@@ -172,7 +172,7 @@ const sessions = new Map<string, { res: express.Response }>();
 // --- Core MCP Handler ---
 async function handleMCPRequest(request: any) {
   const { method, id, params } = request;
-  log("debug", `handleMCPRequest called with method: ${method}, id: ${id}`, { params });
+  log("info", `📥 Handling MCP request: method=${method}, id=${id}`);
 
   switch (method) {
     // --- Standard MCP handshake ---
@@ -317,8 +317,8 @@ app.get("/.well-known/mcp/server-metadata", (req, res) => {
     protocolVersion: "2025-06-18",
     authentication: "bearer",
     capabilities: {
-      tools: true,
-      prompts: true,
+      tools: TOOLS.map(t => t.name),
+      prompts: PROMPTS.map(p => p.name),
     },
   });
 });
@@ -329,7 +329,7 @@ app.get("/health", (req, res) => {
   res.status(200).send("OK");
 });
 
-// MCP SSE endpoint
+// MCP SSE endpoint (Brave Search style)
 app.get("/sse", (req, res) => {
   const expectedKey = process.env.MCP_API_KEY;
   if (!expectedKey) {
@@ -356,65 +356,56 @@ app.get("/sse", (req, res) => {
 
   // Generate unique session ID
   const sessionId = uuidv4();
+  sessions.set(sessionId, { res });
+  log("info", `🔗 SSE client connected: sessionId=${sessionId} ip=${req.ip}`);
 
-  // Send initial comment to keep connection alive in some proxies
+  // Send initial comment
   res.write(`: connected\n\n`);
 
-  // Send MCP initialize message automatically
-  const initMessage = {
-    jsonrpc: "2.0",
-    id: "init",
-    result: {
-      protocolVersion: "2025-06-18",
-      serverInfo: {
-        name: "plantuml-server",
-        version: "0.2.0",
-        description: "MCP SSE & HTTP server for PlantUML diagrams"
-      },
-      capabilities: {
-        tools: { listChanged: false },
-        prompts: { listChanged: false }
-      }
-    }
-  };
-  res.write(`data: ${JSON.stringify(initMessage)}\n\n`);
-
-  // Send initial tools list so Flowise can populate the UI
-  const toolsList = {
-    jsonrpc: "2.0",
-    id: "tools-1",
-    result: { tools: TOOLS }
-  };
-  res.write(`data: ${JSON.stringify(toolsList)}\n\n`);
-
-  // Store session
-  sessions.set(sessionId, { res });
-  log("info", `New SSE session created with sessionId: ${sessionId} from IP: ${req.ip}`);
-
-  // Immediately send MCP initialization message to Flowise
-  sendSSEMessage({
+  // Send notifications/initialized event
+  res.write(`event: message\ndata: ${JSON.stringify({
     jsonrpc: "2.0",
     method: "notifications/initialized",
     params: {
       capabilities: {
-        tools: true,
-        prompts: true
+        tools: TOOLS.map(t => t.name),
+        prompts: PROMPTS.map(p => p.name),
       }
     }
-  });
-  log("info", `Sent MCP initialization message for sessionId: ${sessionId}`);
+  })}\n\n`);
+  log("info", `Sent notifications/initialized to sessionId=${sessionId}`);
 
-  // Heartbeat every 30 seconds to keep connection alive
+  // Send tools/list event (so client can populate tools)
+  res.write(`event: message\ndata: ${JSON.stringify({
+    jsonrpc: "2.0",
+    method: "tools/list",
+    params: { tools: TOOLS }
+  })}\n\n`);
+  log("info", `Sent tools/list to sessionId=${sessionId}`);
+
+  // Send notifications/ready event
+  res.write(`event: message\ndata: ${JSON.stringify({
+    jsonrpc: "2.0",
+    method: "notifications/ready",
+    params: {}
+  })}\n\n`);
+  log("info", `Sent notifications/ready to sessionId=${sessionId}`);
+
+  // Heartbeat every 30s
   const heartbeat = setInterval(() => {
-    res.write(": heartbeat\n\n");
-    log("debug", `Heartbeat sent to sessionId: ${sessionId}`);
+    res.write(`event: message\ndata: ${JSON.stringify({
+      jsonrpc: "2.0",
+      method: "notifications/keepalive",
+      params: {}
+    })}\n\n`);
+    log("info", `💓 Sent keepalive to sessionId=${sessionId}`);
   }, 30000);
 
   // Handle client disconnect
   req.on("close", () => {
     clearInterval(heartbeat);
     sessions.delete(sessionId);
-    log("info", `SSE session closed and removed with sessionId: ${sessionId}`);
+    log("info", `❌ SSE client disconnected: sessionId=${sessionId} ip=${req.ip}`);
   });
 });
 
@@ -424,12 +415,23 @@ function sendSSEMessage(message: any) {
   const data = JSON.stringify(message);
   for (const [sessionId, { res }] of sessions) {
     try {
-      res.write(`data: ${data}\n\n`);
+      res.write(`event: message\ndata: ${data}\n\n`);
       log("debug", `SSE message sent to sessionId: ${sessionId}`);
     } catch (err) {
       log("warn", `Failed to send SSE message to sessionId: ${sessionId}`, err);
     }
   }
+}
+
+// Function to send MCP result via SSE with log
+function sendMCPResult(id: string, result: any) {
+  const message = {
+    jsonrpc: "2.0",
+    id,
+    result,
+  };
+  sendSSEMessage(message);
+  log("info", `✅ Sent MCP result via SSE for id: ${id}`);
 }
 
 // Unified MCP endpoint (strict JSON-RPC) - HTTP classic or SSE if sessionId provided
@@ -444,37 +446,13 @@ app.post("/mcp", async (req, res) => {
     log("info", `Received MCP request with method: ${request.method}, id: ${request.id}`);
 
     const response = await handleMCPRequest(request);
-    log("info", `MCP response ready for id: ${request.id}`);
+    log("info", `📤 MCP response prepared for method=${request.method}, id=${request.id}`);
 
-    // If the request contains a sessionId param and that session exists, send via SSE and respond 204
-    if (request.params?.sessionId && sessions.has(request.params.sessionId)) {
-      log("info", `Sending MCP response via SSE to sessionId: ${request.params.sessionId}, id: ${request.id}`);
-      sendSSEMessage(response);
-      res.status(204).end();
-      return;
+    // If there is at least one SSE session, send result via SSE and return 204
+    if (sessions.size > 0) {
+      sendMCPResult(String(request.id), (response as any).result);
+      return res.status(204).end();
     }
-
-    // --- Always wrap tools/list and prompts/list in JSON-RPC envelope as Flowise expects ---
-    if (request.method === "tools/list") {
-      const tools = (response as any)?.result?.tools || (response as any)?.tools;
-      log("debug", `Responding to tools/list request with id: ${request.id}`);
-      return res.json({
-        jsonrpc: "2.0",
-        id: String(request.id || "1"),
-        result: { tools: tools || [] },
-      });
-    }
-    if (request.method === "prompts/list") {
-      const prompts = (response as any)?.result?.prompts || (response as any)?.prompts;
-      log("debug", `Responding to prompts/list request with id: ${request.id}`);
-      return res.json({
-        jsonrpc: "2.0",
-        id: String(request.id || "1"),
-        result: { prompts: prompts || [] },
-      });
-    }
-
-    // --- Normal MCP response ---
     res.json(response);
   } catch (err: any) {
     log("error", `❌ MCP error for id: ${req.body?.id || "unknown"}:`, err.message);
