@@ -391,6 +391,19 @@ app.get("/sse", (req, res) => {
   sessions.set(sessionId, { res });
   log("info", `New SSE session created with sessionId: ${sessionId} from IP: ${req.ip}`);
 
+  // Immediately send MCP initialization message to Flowise
+  sendSSEMessage({
+    jsonrpc: "2.0",
+    method: "notifications/initialized",
+    params: {
+      capabilities: {
+        tools: true,
+        prompts: true
+      }
+    }
+  });
+  log("info", `Sent MCP initialization message for sessionId: ${sessionId}`);
+
   // Heartbeat every 30 seconds to keep connection alive
   const heartbeat = setInterval(() => {
     res.write(": heartbeat\n\n");
