@@ -188,6 +188,9 @@ class PlantUMLMCPServer {
                 prompts: {},
             },
         });
+        this.server.oninitialized = () => {
+            log('debug', 'MCP initialization completed with client capabilities: ' + JSON.stringify(this.server.getClientCapabilities()));
+        };
         this.setupToolHandlers();
         this.setupPromptHandlers();
     }
@@ -204,58 +207,61 @@ class PlantUMLMCPServer {
         this.server.onerror = handler;
     }
     setupToolHandlers() {
-        this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-            tools: [
-                {
-                    name: 'generate_plantuml_diagram',
-                    description: 'Generate a PlantUML diagram with syntax validation. Returns diagram URLs on success or structured errors for auto-fix workflows.',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            plantuml_code: {
-                                type: 'string',
-                                description: 'PlantUML diagram code that will be validated and rendered.',
+        this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+            log('debug', 'ListTools request received');
+            return {
+                tools: [
+                    {
+                        name: 'generate_plantuml_diagram',
+                        description: 'Generate a PlantUML diagram with syntax validation. Returns diagram URLs on success or structured errors for auto-fix workflows.',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                plantuml_code: {
+                                    type: 'string',
+                                    description: 'PlantUML diagram code that will be validated and rendered.',
+                                },
+                                format: {
+                                    type: 'string',
+                                    enum: ['svg', 'png'],
+                                    default: 'svg',
+                                    description: 'Output image format.',
+                                },
                             },
-                            format: {
-                                type: 'string',
-                                enum: ['svg', 'png'],
-                                default: 'svg',
-                                description: 'Output image format.',
-                            },
+                            required: ['plantuml_code'],
                         },
-                        required: ['plantuml_code'],
                     },
-                },
-                {
-                    name: 'encode_plantuml',
-                    description: 'Encode PlantUML code for usage in URLs or PlantUML servers.',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            plantuml_code: {
-                                type: 'string',
-                                description: 'PlantUML diagram code to encode.',
+                    {
+                        name: 'encode_plantuml',
+                        description: 'Encode PlantUML code for usage in URLs or PlantUML servers.',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                plantuml_code: {
+                                    type: 'string',
+                                    description: 'PlantUML diagram code to encode.',
+                                },
                             },
+                            required: ['plantuml_code'],
                         },
-                        required: ['plantuml_code'],
                     },
-                },
-                {
-                    name: 'decode_plantuml',
-                    description: 'Decode an encoded PlantUML string back to PlantUML source.',
-                    inputSchema: {
-                        type: 'object',
-                        properties: {
-                            encoded_string: {
-                                type: 'string',
-                                description: 'Encoded PlantUML string to decode.',
+                    {
+                        name: 'decode_plantuml',
+                        description: 'Decode an encoded PlantUML string back to PlantUML source.',
+                        inputSchema: {
+                            type: 'object',
+                            properties: {
+                                encoded_string: {
+                                    type: 'string',
+                                    description: 'Encoded PlantUML string to decode.',
+                                },
                             },
+                            required: ['encoded_string'],
                         },
-                        required: ['encoded_string'],
                     },
-                },
-            ],
-        }));
+                ],
+            };
+        });
         this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
             const { name } = request.params;
             const args = (request.params.arguments ?? {});
@@ -279,10 +285,14 @@ class PlantUMLMCPServer {
         });
     }
     setupPromptHandlers() {
-        this.server.setRequestHandler(ListPromptsRequestSchema, async () => ({
-            prompts: PROMPTS.map(({ template, ...prompt }) => prompt),
-        }));
+        this.server.setRequestHandler(ListPromptsRequestSchema, async () => {
+            log('debug', 'ListPrompts request received');
+            return {
+                prompts: PROMPTS.map(({ template, ...prompt }) => prompt),
+            };
+        });
         this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+            log('debug', `GetPrompt request for ${request.params.name}`);
             const prompt = PROMPTS.find((candidate) => candidate.name === request.params.name);
             if (!prompt) {
                 throw new Error(`Unknown prompt: ${request.params.name}`);
@@ -473,6 +483,7 @@ async function startSseServer() {
             }
             if (req.method === 'GET' && requestUrl.pathname === MCP_SSE_PATH) {
                 res.setHeader('Access-Control-Allow-Origin', '*');
+                log('debug', `Incoming SSE GET from ${req.socket.remoteAddress} ${req.headers['user-agent'] ?? ''}`);
                 if (!isValidAuthorizationHeader(req.headers.authorization)) {
                     log('warn', 'Rejected SSE connection due to invalid or missing authorization header.');
                     rejectUnauthorized(res, 'Unauthorized');
@@ -508,6 +519,7 @@ async function startSseServer() {
                     res.writeHead(404).end('Unknown session');
                     return;
                 }
+                log('debug', `Incoming SSE POST for session ${sessionId}`);
                 const incomingAuthorization = req.headers.authorization ?? session.authorization;
                 if (!isValidAuthorizationHeader(incomingAuthorization)) {
                     log('warn', `Rejected SSE message for session ${sessionId} due to invalid authorization header.`);
@@ -594,6 +606,7 @@ async function handleSsePostMessage(session, req, res) {
         res.writeHead(400).end('Invalid JSON payload');
         return;
     }
+    log('debug', `SSE message received for session ${session.transport.sessionId}: ${body}`);
     if (message && typeof message === 'object') {
         message.headers = {
             authorization: req.headers.authorization ?? session.authorization,

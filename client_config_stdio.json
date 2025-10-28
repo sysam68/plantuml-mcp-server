@@ -1,11 +1,10 @@
 {
   "mcpServers": {
     "plantuml": {
-      "command": "node",
+      "command": "npx",
       "args": [
-        "./dist/plantuml-mcp-server.js"
+        "plantuml-mcp-server"
       ],
-      "cwd": ".",
       "env": {
         "MCP_TRANSPORT": "stdio",
         "LOG_LEVEL": "info",

@@ -233,6 +233,10 @@ class PlantUMLMCPServer {
       },
     });
 
+    this.server.oninitialized = () => {
+      log('debug', 'MCP initialization completed with client capabilities: ' + JSON.stringify(this.server.getClientCapabilities()));
+    };
+
     this.setupToolHandlers();
     this.setupPromptHandlers();
   }
@@ -254,8 +258,10 @@ class PlantUMLMCPServer {
   }
 
   private setupToolHandlers() {
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: [
+    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+      log('debug', 'ListTools request received');
+      return {
+        tools: [
         {
           name: 'generate_plantuml_diagram',
           description:
@@ -306,7 +312,8 @@ class PlantUMLMCPServer {
           },
         },
       ],
-    }));
+      };
+    });
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name } = request.params;
@@ -334,11 +341,15 @@ class PlantUMLMCPServer {
   }
 
   private setupPromptHandlers() {
-    this.server.setRequestHandler(ListPromptsRequestSchema, async () => ({
-      prompts: PROMPTS.map(({ template, ...prompt }) => prompt),
-    }));
+    this.server.setRequestHandler(ListPromptsRequestSchema, async () => {
+      log('debug', 'ListPrompts request received');
+      return {
+        prompts: PROMPTS.map(({ template, ...prompt }) => prompt),
+      };
+    });
 
     this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+      log('debug', `GetPrompt request for ${request.params.name}`);
       const prompt = PROMPTS.find((candidate) => candidate.name === request.params.name);
 
       if (!prompt) {
@@ -565,6 +576,7 @@ async function startSseServer() {
 
       if (req.method === 'GET' && requestUrl.pathname === MCP_SSE_PATH) {
         res.setHeader('Access-Control-Allow-Origin', '*');
+        log('debug', `Incoming SSE GET from ${req.socket.remoteAddress} ${req.headers['user-agent'] ?? ''}`);
 
         if (!isValidAuthorizationHeader(req.headers.authorization)) {
           log('warn', 'Rejected SSE connection due to invalid or missing authorization header.');
@@ -609,6 +621,8 @@ async function startSseServer() {
           res.writeHead(404).end('Unknown session');
           return;
         }
+
+        log('debug', `Incoming SSE POST for session ${sessionId}`);
 
         const incomingAuthorization = req.headers.authorization ?? session.authorization;
         if (!isValidAuthorizationHeader(incomingAuthorization)) {
@@ -712,6 +726,8 @@ async function handleSsePostMessage(
     res.writeHead(400).end('Invalid JSON payload');
     return;
   }
+
+  log('debug', `SSE message received for session ${session.transport.sessionId}: ${body}`);
 
   if (message && typeof message === 'object') {
     (message as Record<string, unknown>).headers = {
