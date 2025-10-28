@@ -4,24 +4,43 @@ import { URL } from 'node:url';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-import { CallToolRequestSchema, GetPromptRequestSchema, ListPromptsRequestSchema, ListToolsRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
+import { CallToolRequestSchema, CompleteRequestSchema, GetPromptRequestSchema, ListPromptsRequestSchema, ListResourceTemplatesRequestSchema, ListResourcesRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema, SetLevelRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
 import * as contentType from 'content-type';
 import plantumlEncoder from 'plantuml-encoder';
 import getRawBody from 'raw-body';
-const LOG_LEVELS = ['error', 'warn', 'info', 'debug'];
+const LOG_LEVELS = ['emergency', 'alert', 'critical', 'error', 'warning', 'notice', 'info', 'debug'];
+const LOG_LEVEL_ALIASES = {
+    warn: 'warning',
+    warning: 'warning',
+    err: 'error',
+    fatal: 'critical',
+};
 function normalizePath(path) {
     return path.startsWith('/') ? path : `/${path}`;
 }
-const requestedLogLevel = (process.env.LOG_LEVEL || 'info').toLowerCase();
+function parseLogLevel(value, fallback) {
+    if (!value) {
+        return fallback;
+    }
+    const normalized = value.toLowerCase();
+    if (LOG_LEVELS.includes(normalized)) {
+        return normalized;
+    }
+    if (LOG_LEVEL_ALIASES[normalized]) {
+        return LOG_LEVEL_ALIASES[normalized];
+    }
+    return fallback;
+}
+const requestedLogLevel = parseLogLevel(process.env.LOG_LEVEL, 'info');
 const logLevelIndex = LOG_LEVELS.indexOf(requestedLogLevel) !== -1 ? LOG_LEVELS.indexOf(requestedLogLevel) : LOG_LEVELS.indexOf('info');
-function log(level, message, error) {
+function logToConsole(level, message, error) {
     if (LOG_LEVELS.indexOf(level) > logLevelIndex) {
         return;
     }
     const timestamp = new Date().toISOString();
     const prefix = `[${timestamp}] [${level.toUpperCase()}]`;
     const text = `${prefix} ${message}`;
-    if (level === 'error') {
+    if (level === 'error' || level === 'critical' || level === 'alert' || level === 'emergency') {
         if (error instanceof Error && error.stack) {
             console.error(`${text}\n${error.stack}`);
         }
@@ -33,8 +52,11 @@ function log(level, message, error) {
         }
         return;
     }
-    if (level === 'warn') {
+    if (level === 'warning') {
         console.warn(text);
+    }
+    else if (level === 'debug') {
+        console.debug(text);
     }
     else {
         console.info(text);
@@ -49,12 +71,13 @@ const MCP_SSE_PATH = normalizePath(process.env.MCP_SSE_PATH || '/sse');
 const MCP_SSE_MESSAGES_PATH = normalizePath(process.env.MCP_SSE_MESSAGES_PATH || '/messages');
 const MCP_API_KEY = process.env.MCP_API_KEY;
 const MAXIMUM_MESSAGE_SIZE = '4mb';
-log('info', `Log level set to ${requestedLogLevel}`);
+const COMPLETION_MAX_RESULTS = 100;
+logToConsole('info', `Log level set to ${requestedLogLevel}`);
 if (MCP_API_KEY) {
-    log('info', 'MCP API key authentication enabled.');
+    logToConsole('info', 'MCP API key authentication enabled.');
 }
 else {
-    log('warn', 'MCP_API_KEY not set. Server will accept unauthenticated requests.');
+    logToConsole('warning', 'MCP_API_KEY not set. Server will accept unauthenticated requests.');
 }
 const PLANTUML_ERROR_PROMPT_BODY = `## PlantUML MCP Server - Error Handling & Auto-Fix Guide
 
@@ -125,6 +148,7 @@ return result; // Success path
 const PROMPTS = [
     {
         name: 'plantuml_error_handling',
+        title: 'PlantUML Error Handling Guide',
         description: 'Guidelines for handling PlantUML syntax errors and implementing auto-fix workflows.',
         arguments: [
             {
@@ -147,6 +171,48 @@ const PROMPTS = [
             const context = contextParts.length > 0 ? `${contextParts.join('\n\n')}\n\n---\n\n` : '';
             return `${context}${PLANTUML_ERROR_PROMPT_BODY}`;
         },
+    },
+];
+const STATIC_RESOURCES = [
+    {
+        uri: 'resource://plantuml/server-guide',
+        name: 'server-guide',
+        title: 'PlantUML MCP Server Guide',
+        description: 'Overview of prompts, tools, and usage guidelines exposed by the PlantUML MCP server.',
+        mimeType: 'text/markdown',
+        text: `# PlantUML MCP Server Guide
+
+This MCP server exposes:
+
+- **Prompts** for troubleshooting PlantUML validation errors
+- **Tools** to encode, decode, and render PlantUML diagrams
+- **Structured outputs** aligned with the 2025-06-18 MCP schema
+
+## Prompts
+
+Use \`plantuml_error_handling\` to review syntax errors and retry strategies. The prompt accepts optional arguments:
+
+- \`error_message\`
+- \`plantuml_code\`
+
+## Tools
+
+| Tool | Description | Key Arguments |
+| ---- | ----------- | ------------- |
+| \`generate_plantuml_diagram\` | Validate and render PlantUML input | \`plantuml_code\`, optional \`format\` (\`svg\` or \`png\`) |
+| \`encode_plantuml\` | Encode text for PlantUML servers | \`plantuml_code\` |
+| \`decode_plantuml\` | Decode an encoded payload | \`encoded_string\` |
+
+All tools provide structured content describing the outcome or failure details.
+
+## Completion
+
+The server offers completions for resource URIs; start typing \`resource://plantuml/\` when selecting resources to see suggestions.
+
+## Logging
+
+Clients can configure log forwarding through \`logging/setLevel\`. Warnings and above are emitted by default when enabled.
+`,
     },
 ];
 function encodePlantUML(plantuml) {
@@ -181,20 +247,93 @@ function extractAuthorizationHeader(request) {
 class PlantUMLMCPServer {
     server;
     defaultAuthorization;
+    clientLogLevel;
+    supportsCompletions = false;
     constructor() {
         this.server = new Server({
             name: 'plantuml-server',
+            title: 'PlantUML MCP Server',
             version: SERVER_VERSION,
-            capabilities: {
-                tools: {},
-                prompts: {},
-            },
         });
+        this.clientLogLevel = undefined;
+        const serverWithCapabilities = this.server;
+        const originalGetCapabilities = serverWithCapabilities.getCapabilities.bind(this.server);
+        serverWithCapabilities.getCapabilities = () => {
+            const base = originalGetCapabilities();
+            const capabilities = { ...base };
+            if (base.prompts) {
+                capabilities.prompts = { listChanged: false };
+            }
+            if (base.resources) {
+                capabilities.resources = { subscribe: false, listChanged: false };
+            }
+            if (base.tools) {
+                capabilities.tools = { listChanged: false };
+            }
+            if (base.logging) {
+                capabilities.logging = base.logging;
+            }
+            if (this.supportsCompletions) {
+                capabilities.completions = {};
+            }
+            return capabilities;
+        };
         this.server.oninitialized = () => {
-            log('debug', 'MCP initialization completed with client capabilities: ' + JSON.stringify(this.server.getClientCapabilities()));
+            this.log('debug', 'MCP initialization completed with client capabilities: ' +
+                JSON.stringify(this.server.getClientCapabilities()));
         };
         this.setupToolHandlers();
         this.setupPromptHandlers();
+        this.setupResourceHandlers();
+        this.setupCompletionHandlers();
+        this.setupLoggingHandlers();
+    }
+    getClientLogLevelIndex() {
+        if (!this.clientLogLevel) {
+            return undefined;
+        }
+        const index = LOG_LEVELS.indexOf(this.clientLogLevel);
+        return index === -1 ? undefined : index;
+    }
+    shouldForwardLog(level) {
+        const clientIndex = this.getClientLogLevelIndex();
+        if (clientIndex === undefined) {
+            return false;
+        }
+        return LOG_LEVELS.indexOf(level) <= clientIndex;
+    }
+    formatErrorForClient(error) {
+        if (error instanceof Error) {
+            return {
+                name: error.name,
+                message: error.message,
+                stack: error.stack,
+            };
+        }
+        if (error === undefined) {
+            return undefined;
+        }
+        return error;
+    }
+    async forwardLog(level, message, error, data) {
+        if (!this.shouldForwardLog(level)) {
+            return;
+        }
+        const payload = data ?? (error ? { message, error: this.formatErrorForClient(error) } : { message });
+        try {
+            await this.server.sendLoggingMessage({
+                level,
+                logger: 'plantuml-mcp-server',
+                data: payload,
+            });
+        }
+        catch (sendError) {
+            logToConsole('warning', 'Failed to forward log message to client', sendError);
+        }
+    }
+    log(level, message, error, data) {
+        logToConsole(level, message, error);
+        void this.forwardLog(level, message, error, data);
     }
     setDefaultAuthorization(authHeader) {
         this.defaultAuthorization = authHeader;
@@ -204,7 +343,7 @@ class PlantUMLMCPServer {
             return;
         }
         if (!this.defaultAuthorization) {
-            log('warn', 'Unauthorized read request blocked due to missing authorization header.');
+            this.log('warning', 'Unauthorized read request blocked due to missing authorization header.');
             throw new Error('Unauthorized: Invalid or missing authorization header.');
         }
     }
@@ -221,13 +360,18 @@ class PlantUMLMCPServer {
         this.server.onerror = handler;
     }
     setupToolHandlers() {
-        this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-            log('debug', 'ListTools request received');
+        this.server.setRequestHandler(ListToolsRequestSchema, async (request) => {
+            this.log('debug', 'ListTools request received');
             this.assertAuthorizedForRead();
+            if (request.params?.cursor) {
+                this.log('debug', `Ignoring unsupported tools cursor "${request.params.cursor}" (no additional pages).`);
+                return { tools: [] };
+            }
             return {
                 tools: [
                     {
                         name: 'generate_plantuml_diagram',
+                        title: 'Generate PlantUML Diagram',
                         description: 'Generate a PlantUML diagram with syntax validation. Returns diagram URLs on success or structured errors for auto-fix workflows.',
                         inputSchema: {
                             type: 'object',
@@ -272,6 +416,7 @@ class PlantUMLMCPServer {
                     },
                     {
                         name: 'encode_plantuml',
+                        title: 'Encode PlantUML',
                         description: 'Encode PlantUML code for usage in URLs or PlantUML servers.',
                         inputSchema: {
                             type: 'object',
@@ -297,6 +442,7 @@ class PlantUMLMCPServer {
                     },
                     {
                         name: 'decode_plantuml',
+                        title: 'Decode PlantUML',
                         description: 'Decode an encoded PlantUML string back to PlantUML source.',
                         inputSchema: {
                             type: 'object',
@@ -324,11 +470,11 @@ class PlantUMLMCPServer {
         this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
             const { name } = request.params;
             const args = (request.params.arguments ?? {});
-            log('debug', `CallTool request received: ${name}`);
-            log('debug', `Request arguments: ${JSON.stringify(args)}`);
+            this.log('debug', `CallTool request received: ${name}`);
+            this.log('debug', `Request arguments: ${JSON.stringify(args)}`);
             const authorization = extractAuthorizationHeader(request) ?? this.defaultAuthorization;
             if (!isValidAuthorizationHeader(authorization)) {
-                log('warn', `Unauthorized CallTool request blocked for tool ${name ?? '<unknown>'}.`);
+                this.log('warning', `Unauthorized CallTool request blocked for tool ${name ?? '<unknown>'}.`);
                 return unauthorizedResponse();
             }
             switch (name) {
@@ -344,15 +490,19 @@ class PlantUMLMCPServer {
         });
     }
     setupPromptHandlers() {
-        this.server.setRequestHandler(ListPromptsRequestSchema, async () => {
-            log('debug', 'ListPrompts request received');
+        this.server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
+            this.log('debug', 'ListPrompts request received');
             this.assertAuthorizedForRead();
+            if (request.params?.cursor) {
+                this.log('debug', `Ignoring unsupported prompts cursor "${request.params.cursor}" (no additional pages).`);
+                return { prompts: [] };
+            }
             return {
                 prompts: PROMPTS.map(({ template, ...prompt }) => prompt),
             };
         });
         this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
-            log('debug', `GetPrompt request for ${request.params.name}`);
+            this.log('debug', `GetPrompt request for ${request.params.name}`);
             this.assertAuthorizedForRead();
             const prompt = PROMPTS.find((candidate) => candidate.name === request.params.name);
             if (!prompt) {
@@ -374,6 +524,80 @@ class PlantUMLMCPServer {
             };
         });
     }
+    setupResourceHandlers() {
+        this.server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
+            this.log('debug', 'ListResources request received');
+            this.assertAuthorizedForRead();
+            if (request.params?.cursor) {
+                this.log('debug', `Ignoring unsupported resources cursor "${request.params.cursor}" (no additional pages).`);
+                return { resources: [] };
+            }
+            return {
+                resources: STATIC_RESOURCES.map(({ text, ...metadata }) => metadata),
+            };
+        });
+        this.server.setRequestHandler(ListResourceTemplatesRequestSchema, async (request) => {
+            this.log('debug', 'ListResourceTemplates request received');
+            this.assertAuthorizedForRead();
+            if (request.params?.cursor) {
+                this.log('debug', `Ignoring unsupported resource template cursor "${request.params.cursor}" (no additional pages).`);
+            }
+            return { resourceTemplates: [] };
+        });
+        this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+            const { uri } = request.params;
+            this.log('debug', `ReadResource request for ${uri}`);
+            this.assertAuthorizedForRead();
+            const resource = STATIC_RESOURCES.find((entry) => entry.uri === uri);
+            if (!resource) {
+                this.log('warning', `Resource not found: ${uri}`);
+                const error = new Error(`Resource not found: ${uri}`);
+                error.code = -32002;
+                error.data = { uri };
+                throw error;
+            }
+            return {
+                contents: [
+                    {
+                        uri: resource.uri,
+                        mimeType: resource.mimeType,
+                        text: resource.text,
+                    },
+                ],
+            };
+        });
+    }
+    setupCompletionHandlers() {
+        this.supportsCompletions = true;
+        this.server.setRequestHandler(CompleteRequestSchema, async (request) => {
+            this.log('debug', `Completion request received for ${request.params.ref.type}`);
+            const searchValue = request.params.argument?.value?.toLowerCase() ?? '';
+            let values = [];
+            let total = 0;
+            let hasMore = false;
+            if (request.params.ref.type === 'ref/resource') {
+                const matches = STATIC_RESOURCES.filter((resource) => resource.uri.toLowerCase().includes(searchValue));
+                total = matches.length;
+                values = matches.slice(0, COMPLETION_MAX_RESULTS).map((resource) => resource.uri);
+                hasMore = matches.length > values.length;
+            }
+            return {
+                completion: {
+                    values,
+                    total,
+                    hasMore,
+                },
+            };
+        });
+    }
+    setupLoggingHandlers() {
+        this.server.setRequestHandler(SetLevelRequestSchema, async (request) => {
+            const newLevel = parseLogLevel(request.params.level, this.clientLogLevel ?? requestedLogLevel);
+            this.clientLogLevel = newLevel;
+            this.log('notice', `Client log level set to ${newLevel}`);
+            return {};
+        });
+    }
     async validatePlantUMLSyntax(encoded, originalCode) {
         try {
             const validationUrl = `${PLANTUML_SERVER_URL}/txt/${encoded}`;
@@ -387,7 +611,7 @@ class PlantUMLMCPServer {
             const lines = originalCode.split('\n');
             const lineNumber = errorLineHeader ? Number.parseInt(errorLineHeader, 10) : undefined;
             const problematicCode = lineNumber && lineNumber > 0 && lineNumber <= lines.length ? lines[lineNumber - 1]?.trim() ?? '' : '';
-            log('debug', `Validation failed: ${errorMessage} at line ${lineNumber ?? 'unknown'}`);
+            this.log('debug', `Validation failed: ${errorMessage} at line ${lineNumber ?? 'unknown'}`);
             return {
                 isValid: false,
                 error: {
@@ -400,7 +624,7 @@ class PlantUMLMCPServer {
             };
         }
         catch (error) {
-            log('warn', 'Validation endpoint failed, falling back to generation-only flow.', error);
+            this.log('warning', 'Validation endpoint failed, falling back to generation-only flow.', error);
             return { isValid: true };
         }
     }
@@ -414,7 +638,7 @@ class PlantUMLMCPServer {
             const encoded = encodePlantUML(plantumlCode);
             const validation = await this.validatePlantUMLSyntax(encoded, plantumlCode);
             if (!validation.isValid && validation.error) {
-                const structuredOutput = {
+                const structuredContent = {
                     success: false,
                     validation_failed: true,
                     error_details: {
@@ -427,11 +651,11 @@ class PlantUMLMCPServer {
                     retry_instructions: 'The PlantUML code has syntax errors. Please fix the errors and retry with corrected syntax.',
                 };
                 return {
-                    structuredOutput,
+                    structuredContent,
                     content: [
                         {
                             type: 'text',
-                            text: `PlantUML validation failed:\n\`\`\`json\n${JSON.stringify(structuredOutput.error_details, null, 2)}\n\`\`\`\n\nRetry instructions: ${structuredOutput.retry_instructions}`,
+                            text: `PlantUML validation failed:\n\`\`\`json\n${JSON.stringify(structuredContent.error_details, null, 2)}\n\`\`\`\n\nRetry instructions: ${structuredContent.retry_instructions}`,
                         },
                     ],
                     isError: true,
@@ -444,7 +668,7 @@ class PlantUMLMCPServer {
             }
             const markdownEmbed = `![PlantUML Diagram](${diagramUrl})`;
             return {
-                structuredOutput: {
+                structuredContent: {
                     success: true,
                     format,
                     diagram_url: diagramUrl,
@@ -460,10 +684,10 @@ class PlantUMLMCPServer {
             };
         }
         catch (error) {
-            log('error', 'Error generating PlantUML diagram', error);
+            this.log('error', 'Error generating PlantUML diagram', error);
             const errorMessage = error instanceof Error ? error.message : String(error);
             return {
-                structuredOutput: {
+                structuredContent: {
                     success: false,
                     error_message: errorMessage,
                 },
@@ -485,7 +709,7 @@ class PlantUMLMCPServer {
         try {
             const encoded = encodePlantUML(plantumlCode);
             return {
-                structuredOutput: {
+                structuredContent: {
                     success: true,
                     encoded,
                     svg_url: `${PLANTUML_SERVER_URL}/svg/${encoded}`,
@@ -500,10 +724,10 @@ class PlantUMLMCPServer {
             };
         }
         catch (error) {
-            log('error', 'Error encoding PlantUML', error);
+            this.log('error', 'Error encoding PlantUML', error);
             const errorMessage = error instanceof Error ? error.message : String(error);
             return {
-                structuredOutput: {
+                structuredContent: {
                     success: false,
                     error_message: errorMessage,
                 },
@@ -525,7 +749,7 @@ class PlantUMLMCPServer {
         try {
             const decoded = decodePlantUML(encodedString);
             return {
-                structuredOutput: {
+                structuredContent: {
                     success: true,
                     decoded,
                 },
@@ -538,10 +762,10 @@ class PlantUMLMCPServer {
             };
         }
         catch (error) {
-            log('error', 'Error decoding PlantUML', error);
+            this.log('error', 'Error decoding PlantUML', error);
             const errorMessage = error instanceof Error ? error.message : String(error);
             return {
-                structuredOutput: {
+                structuredContent: {
                     success: false,
                     error_message: errorMessage,
                 },
@@ -582,15 +806,15 @@ async function startSseServer() {
             }
             if (req.method === 'GET' && requestUrl.pathname === MCP_SSE_PATH) {
                 res.setHeader('Access-Control-Allow-Origin', '*');
-                log('debug', `Incoming SSE GET from ${req.socket.remoteAddress} ${req.headers['user-agent'] ?? ''}`);
+                logToConsole('debug', `Incoming SSE GET from ${req.socket.remoteAddress} ${req.headers['user-agent'] ?? ''}`);
                 if (!isValidAuthorizationHeader(req.headers.authorization)) {
-                    log('warn', 'Rejected SSE connection due to invalid or missing authorization header.');
+                    logToConsole('warning', 'Rejected SSE connection due to invalid or missing authorization header.');
                     rejectUnauthorized(res, 'Unauthorized');
                     return;
                 }
                 const serverInstance = new PlantUMLMCPServer();
                 const absoluteMessagesEndpoint = new URL(MCP_SSE_MESSAGES_PATH, base).toString();
-                log('debug', `Advertising SSE message endpoint ${absoluteMessagesEndpoint}`);
+                serverInstance.log('debug', `Advertising SSE message endpoint ${absoluteMessagesEndpoint}`);
                 const transport = new SSEServerTransport(absoluteMessagesEndpoint, res);
                 serverInstance.setDefaultAuthorization(req.headers.authorization ?? undefined);
                 sessions.set(transport.sessionId, {
@@ -600,13 +824,13 @@ async function startSseServer() {
                 });
                 serverInstance.onClose(() => {
                     sessions.delete(transport.sessionId);
-                    log('info', `SSE session closed: ${transport.sessionId}`);
+                    serverInstance.log('info', `SSE session closed: ${transport.sessionId}`);
                 });
                 serverInstance.onError((error) => {
-                    log('error', `Unhandled error in SSE session ${transport.sessionId}`, error);
+                    serverInstance.log('error', `Unhandled error in SSE session ${transport.sessionId}`, error);
                 });
                 await serverInstance.connect(transport);
-                log('info', `SSE session started: ${transport.sessionId}`);
+                serverInstance.log('info', `SSE session started: ${transport.sessionId}`);
                 return;
             }
             if (req.method === 'POST' && requestUrl.pathname === MCP_SSE_MESSAGES_PATH) {
@@ -622,10 +846,10 @@ async function startSseServer() {
                     res.writeHead(404).end('Unknown session');
                     return;
                 }
-                log('debug', `Incoming SSE POST for session ${sessionId}`);
+                session.instance.log('debug', `Incoming SSE POST for session ${sessionId}`);
                 const incomingAuthorization = req.headers.authorization ?? session.authorization;
                 if (!isValidAuthorizationHeader(incomingAuthorization)) {
-                    log('warn', `Rejected SSE message for session ${sessionId} due to invalid authorization header.`);
+                    session.instance.log('warning', `Rejected SSE message for session ${sessionId} due to invalid authorization header.`);
                     rejectUnauthorized(res, 'Unauthorized');
                     return;
                 }
@@ -643,7 +867,7 @@ async function startSseServer() {
             res.writeHead(404).end('Not found');
         }
         catch (error) {
-            log('error', 'HTTP server error', error);
+            logToConsole('error', 'HTTP server error', error);
             if (!res.headersSent) {
                 res.writeHead(500).end('Internal server error');
             }
@@ -654,21 +878,21 @@ async function startSseServer() {
     });
     await new Promise((resolve, reject) => {
         httpServer.on('error', (error) => {
-            log('error', 'HTTP server error', error);
+            logToConsole('error', 'HTTP server error', error);
             reject(error);
         });
         httpServer.listen(MCP_PORT, MCP_HOST, () => {
-            log('info', `PlantUML MCP server (SSE transport) listening on http://${MCP_HOST}:${MCP_PORT}${MCP_SSE_PATH}`);
+            logToConsole('info', `PlantUML MCP server (SSE transport) listening on http://${MCP_HOST}:${MCP_PORT}${MCP_SSE_PATH}`);
         });
         const shutdown = async () => {
-            log('info', 'Shutdown signal received, closing server.');
+            logToConsole('info', 'Shutdown signal received, closing server.');
             try {
                 await Promise.all(Array.from(sessions.values()).map(async ({ instance }) => {
                     try {
                         await instance.close();
                     }
                     catch (error) {
-                        log('warn', 'Error closing session during shutdown', error);
+                        instance.log('warning', 'Error closing session during shutdown', error);
                     }
                 }));
             }
@@ -700,7 +924,7 @@ async function handleSsePostMessage(session, req, res) {
         });
     }
     catch (error) {
-        log('warn', 'Failed to read SSE message body', error);
+        session.instance.log('warning', 'Failed to read SSE message body', error);
         res.writeHead(400).end('Invalid request body');
         return;
     }
@@ -709,16 +933,16 @@ async function handleSsePostMessage(session, req, res) {
         message = JSON.parse(body);
     }
     catch (error) {
-        log('warn', 'Failed to parse SSE JSON payload', error);
+        session.instance.log('warning', 'Failed to parse SSE JSON payload', error);
         res.writeHead(400).end('Invalid JSON payload');
         return;
     }
-    log('debug', `SSE message received for session ${session.transport.sessionId}: ${body}`);
+    session.instance.log('debug', `SSE message received for session ${session.transport.sessionId}: ${body}`);
     try {
         await session.transport.handleMessage(message);
     }
     catch (error) {
-        log('error', 'Failed to handle SSE message', error);
+        session.instance.log('error', 'Failed to handle SSE message', error);
         res.writeHead(500).end('Internal server error');
         return;
     }
@@ -729,7 +953,7 @@ async function start() {
         const server = new PlantUMLMCPServer();
         const transport = new StdioServerTransport();
         await server.connect(transport);
-        log('info', 'PlantUML MCP server running on stdio transport');
+        server.log('info', 'PlantUML MCP server running on stdio transport');
         return;
     }
     if (MCP_TRANSPORT === 'sse') {
@@ -739,7 +963,7 @@ async function start() {
     throw new Error(`Unsupported MCP_TRANSPORT value: ${MCP_TRANSPORT}`);
 }
 start().catch((error) => {
-    log('error', 'PlantUML MCP server failed to start', error);
+    logToConsole('error', 'PlantUML MCP server failed to start', error);
     process.exitCode = 1;
 });
 //# sourceMappingURL=plantuml-mcp-server.js.map
