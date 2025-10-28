@@ -248,19 +248,26 @@ class PlantUMLMCPServer {
                         outputSchema: {
                             type: 'object',
                             properties: {
-                                content: {
-                                    type: 'array',
-                                    items: {
-                                        type: 'object',
-                                        properties: {
-                                            type: { type: 'string', enum: ['text'] },
-                                            text: { type: 'string' },
-                                        },
-                                        required: ['type', 'text'],
+                                success: { type: 'boolean' },
+                                format: { type: 'string', enum: ['svg', 'png'] },
+                                diagram_url: { type: 'string', format: 'uri' },
+                                markdown_embed: { type: 'string' },
+                                encoded_diagram: { type: 'string' },
+                                validation_failed: { type: 'boolean' },
+                                error_details: {
+                                    type: 'object',
+                                    properties: {
+                                        error_message: { type: 'string' },
+                                        error_line: { type: 'integer' },
+                                        problematic_code: { type: 'string' },
+                                        full_plantuml: { type: 'string' },
+                                        full_context: { type: 'string' },
                                     },
                                 },
-                                isError: { type: 'boolean' },
+                                retry_instructions: { type: 'string' },
+                                error_message: { type: 'string' },
                             },
+                            required: ['success'],
                         },
                     },
                     {
@@ -279,19 +286,13 @@ class PlantUMLMCPServer {
                         outputSchema: {
                             type: 'object',
                             properties: {
-                                content: {
-                                    type: 'array',
-                                    items: {
-                                        type: 'object',
-                                        properties: {
-                                            type: { type: 'string', enum: ['text'] },
-                                            text: { type: 'string' },
-                                        },
-                                        required: ['type', 'text'],
-                                    },
-                                },
-                                isError: { type: 'boolean' },
+                                success: { type: 'boolean' },
+                                encoded: { type: 'string' },
+                                svg_url: { type: 'string', format: 'uri' },
+                                png_url: { type: 'string', format: 'uri' },
+                                error_message: { type: 'string' },
                             },
+                            required: ['success'],
                         },
                     },
                     {
@@ -310,19 +311,11 @@ class PlantUMLMCPServer {
                         outputSchema: {
                             type: 'object',
                             properties: {
-                                content: {
-                                    type: 'array',
-                                    items: {
-                                        type: 'object',
-                                        properties: {
-                                            type: { type: 'string', enum: ['text'] },
-                                            text: { type: 'string' },
-                                        },
-                                        required: ['type', 'text'],
-                                    },
-                                },
-                                isError: { type: 'boolean' },
+                                success: { type: 'boolean' },
+                                decoded: { type: 'string' },
+                                error_message: { type: 'string' },
                             },
+                            required: ['success'],
                         },
                     },
                 ],
@@ -421,21 +414,24 @@ class PlantUMLMCPServer {
             const encoded = encodePlantUML(plantumlCode);
             const validation = await this.validatePlantUMLSyntax(encoded, plantumlCode);
             if (!validation.isValid && validation.error) {
+                const structuredOutput = {
+                    success: false,
+                    validation_failed: true,
+                    error_details: {
+                        error_message: validation.error.message,
+                        error_line: validation.error.line,
+                        problematic_code: validation.error.problematic_code,
+                        full_plantuml: validation.error.full_plantuml,
+                        full_context: validation.error.full_context,
+                    },
+                    retry_instructions: 'The PlantUML code has syntax errors. Please fix the errors and retry with corrected syntax.',
+                };
                 return {
+                    structuredOutput,
                     content: [
                         {
                             type: 'text',
-                            text: JSON.stringify({
-                                validation_failed: true,
-                                error_details: {
-                                    error_message: validation.error.message,
-                                    error_line: validation.error.line,
-                                    problematic_code: validation.error.problematic_code,
-                                    full_plantuml: validation.error.full_plantuml,
-                                    full_context: validation.error.full_context,
-                                },
-                                retry_instructions: 'The PlantUML code has syntax errors. Please fix the errors and retry with corrected syntax.',
-                            }, null, 2),
+                            text: `PlantUML validation failed:\n\`\`\`json\n${JSON.stringify(structuredOutput.error_details, null, 2)}\n\`\`\`\n\nRetry instructions: ${structuredOutput.retry_instructions}`,
                         },
                     ],
                     isError: true,
@@ -446,22 +442,35 @@ class PlantUMLMCPServer {
             if (!response.ok) {
                 throw new Error(`PlantUML server returned ${response.status}: ${response.statusText}`);
             }
+            const markdownEmbed = `![PlantUML Diagram](${diagramUrl})`;
             return {
+                structuredOutput: {
+                    success: true,
+                    format,
+                    diagram_url: diagramUrl,
+                    markdown_embed: markdownEmbed,
+                    encoded_diagram: encoded,
+                },
                 content: [
                     {
                         type: 'text',
-                        text: `Successfully generated PlantUML diagram!\n\n**Embeddable ${format.toUpperCase()} URL:**\n\`\`\`\n${diagramUrl}\n\`\`\`\n\n**Markdown embed:**\n\`\`\`markdown\n![PlantUML Diagram](${diagramUrl})\n\`\`\``,
+                        text: `Successfully generated PlantUML diagram!\n\n**Embeddable ${format.toUpperCase()} URL:**\n\`\`\`\n${diagramUrl}\n\`\`\`\n\n**Markdown embed:**\n\`\`\`markdown\n${markdownEmbed}\n\`\`\``,
                     },
                 ],
             };
         }
         catch (error) {
             log('error', 'Error generating PlantUML diagram', error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
             return {
+                structuredOutput: {
+                    success: false,
+                    error_message: errorMessage,
+                },
                 content: [
                     {
                         type: 'text',
-                        text: `Error generating PlantUML diagram: ${error instanceof Error ? error.message : String(error)}`,
+                        text: `Error generating PlantUML diagram: ${errorMessage}`,
                     },
                 ],
                 isError: true,
@@ -476,6 +485,12 @@ class PlantUMLMCPServer {
         try {
             const encoded = encodePlantUML(plantumlCode);
             return {
+                structuredOutput: {
+                    success: true,
+                    encoded,
+                    svg_url: `${PLANTUML_SERVER_URL}/svg/${encoded}`,
+                    png_url: `${PLANTUML_SERVER_URL}/png/${encoded}`,
+                },
                 content: [
                     {
                         type: 'text',
@@ -486,11 +501,16 @@ class PlantUMLMCPServer {
         }
         catch (error) {
             log('error', 'Error encoding PlantUML', error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
             return {
+                structuredOutput: {
+                    success: false,
+                    error_message: errorMessage,
+                },
                 content: [
                     {
                         type: 'text',
-                        text: `Error encoding PlantUML: ${error instanceof Error ? error.message : String(error)}`,
+                        text: `Error encoding PlantUML: ${errorMessage}`,
                     },
                 ],
                 isError: true,
@@ -505,6 +525,10 @@ class PlantUMLMCPServer {
         try {
             const decoded = decodePlantUML(encodedString);
             return {
+                structuredOutput: {
+                    success: true,
+                    decoded,
+                },
                 content: [
                     {
                         type: 'text',
@@ -515,11 +539,16 @@ class PlantUMLMCPServer {
         }
         catch (error) {
             log('error', 'Error decoding PlantUML', error);
+            const errorMessage = error instanceof Error ? error.message : String(error);
             return {
+                structuredOutput: {
+                    success: false,
+                    error_message: errorMessage,
+                },
                 content: [
                     {
                         type: 'text',
-                        text: `Error decoding PlantUML: ${error instanceof Error ? error.message : String(error)}`,
+                        text: `Error decoding PlantUML: ${errorMessage}`,
                     },
                 ],
                 isError: true,
