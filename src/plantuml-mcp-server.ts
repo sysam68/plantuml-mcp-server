@@ -64,6 +64,7 @@ const MCP_SSE_MESSAGES_PATH = normalizePath(process.env.MCP_SSE_MESSAGES_PATH ||
 const MCP_API_KEY = process.env.MCP_API_KEY;
 const MAXIMUM_MESSAGE_SIZE = '4mb';
 
+log('info', `Log level set to ${requestedLogLevel}`);
 if (MCP_API_KEY) {
   log('info', 'MCP API key authentication enabled.');
 } else {
