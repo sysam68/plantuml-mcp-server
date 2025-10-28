@@ -223,6 +223,7 @@ function extractAuthorizationHeader(request: unknown): string | undefined {
 
 class PlantUMLMCPServer {
   private server: Server;
+  private defaultAuthorization?: string;
 
   constructor() {
     this.server = new Server({
@@ -240,6 +241,10 @@ class PlantUMLMCPServer {
 
     this.setupToolHandlers();
     this.setupPromptHandlers();
+  }
+
+  setDefaultAuthorization(authHeader?: string) {
+    this.defaultAuthorization = authHeader;
   }
 
   async connect(transport: Transport) {
@@ -322,7 +327,7 @@ class PlantUMLMCPServer {
       log('debug', `CallTool request received: ${name}`);
       log('debug', `Request arguments: ${JSON.stringify(args)}`);
 
-      const authorization = extractAuthorizationHeader(request);
+      const authorization = extractAuthorizationHeader(request) ?? this.defaultAuthorization;
       if (!isValidAuthorizationHeader(authorization)) {
         log('warn', `Unauthorized CallTool request blocked for tool ${name ?? '<unknown>'}.`);
         return unauthorizedResponse();
@@ -592,6 +597,8 @@ async function startSseServer() {
         log('debug', `Advertising SSE message endpoint ${absoluteMessagesEndpoint}`);
         const transport = new SSEServerTransport(absoluteMessagesEndpoint, res);
 
+        serverInstance.setDefaultAuthorization(req.headers.authorization ?? undefined);
+
         sessions.set(transport.sessionId, {
           transport,
           instance: serverInstance,
@@ -634,6 +641,11 @@ async function startSseServer() {
           log('warn', `Rejected SSE message for session ${sessionId} due to invalid authorization header.`);
           rejectUnauthorized(res, 'Unauthorized');
           return;
+        }
+
+        if (incomingAuthorization !== session.authorization) {
+          session.authorization = incomingAuthorization;
+          session.instance.setDefaultAuthorization(incomingAuthorization);
         }
 
         await handleSsePostMessage(session, req, res);
@@ -733,12 +745,6 @@ async function handleSsePostMessage(
   }
 
   log('debug', `SSE message received for session ${session.transport.sessionId}: ${body}`);
-
-  if (message && typeof message === 'object') {
-    (message as Record<string, unknown>).headers = {
-      authorization: req.headers.authorization ?? session.authorization,
-    };
-  }
 
   try {
     await session.transport.handleMessage(message);

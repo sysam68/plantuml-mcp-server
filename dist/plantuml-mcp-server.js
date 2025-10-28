@@ -18,7 +18,8 @@ function log(level, message, error) {
     if (LOG_LEVELS.indexOf(level) > logLevelIndex) {
         return;
     }
-    const prefix = `[${level.toUpperCase()}]`;
+    const timestamp = new Date().toISOString();
+    const prefix = `[${timestamp}] [${level.toUpperCase()}]`;
     const text = `${prefix} ${message}`;
     if (level === 'error') {
         if (error instanceof Error && error.stack) {
@@ -179,6 +180,7 @@ function extractAuthorizationHeader(request) {
 }
 class PlantUMLMCPServer {
     server;
+    defaultAuthorization;
     constructor() {
         this.server = new Server({
             name: 'plantuml-server',
@@ -193,6 +195,9 @@ class PlantUMLMCPServer {
         };
         this.setupToolHandlers();
         this.setupPromptHandlers();
+    }
+    setDefaultAuthorization(authHeader) {
+        this.defaultAuthorization = authHeader;
     }
     async connect(transport) {
         await this.server.connect(transport);
@@ -267,7 +272,7 @@ class PlantUMLMCPServer {
             const args = (request.params.arguments ?? {});
             log('debug', `CallTool request received: ${name}`);
             log('debug', `Request arguments: ${JSON.stringify(args)}`);
-            const authorization = extractAuthorizationHeader(request);
+            const authorization = extractAuthorizationHeader(request) ?? this.defaultAuthorization;
             if (!isValidAuthorizationHeader(authorization)) {
                 log('warn', `Unauthorized CallTool request blocked for tool ${name ?? '<unknown>'}.`);
                 return unauthorizedResponse();
@@ -495,6 +500,7 @@ async function startSseServer() {
                 const absoluteMessagesEndpoint = new URL(MCP_SSE_MESSAGES_PATH, base).toString();
                 log('debug', `Advertising SSE message endpoint ${absoluteMessagesEndpoint}`);
                 const transport = new SSEServerTransport(absoluteMessagesEndpoint, res);
+                serverInstance.setDefaultAuthorization(req.headers.authorization ?? undefined);
                 sessions.set(transport.sessionId, {
                     transport,
                     instance: serverInstance,
@@ -529,6 +535,10 @@ async function startSseServer() {
                     log('warn', `Rejected SSE message for session ${sessionId} due to invalid authorization header.`);
                     rejectUnauthorized(res, 'Unauthorized');
                     return;
+                }
+                if (incomingAuthorization !== session.authorization) {
+                    session.authorization = incomingAuthorization;
+                    session.instance.setDefaultAuthorization(incomingAuthorization);
                 }
                 await handleSsePostMessage(session, req, res);
                 return;
@@ -611,11 +621,6 @@ async function handleSsePostMessage(session, req, res) {
         return;
     }
     log('debug', `SSE message received for session ${session.transport.sessionId}: ${body}`);
-    if (message && typeof message === 'object') {
-        message.headers = {
-            authorization: req.headers.authorization ?? session.authorization,
-        };
-    }
     try {
         await session.transport.handleMessage(message);
     }
