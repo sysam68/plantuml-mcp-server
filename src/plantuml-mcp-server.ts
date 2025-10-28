@@ -247,6 +247,16 @@ class PlantUMLMCPServer {
     this.defaultAuthorization = authHeader;
   }
 
+  private assertAuthorizedForRead(): void {
+    if (!MCP_API_KEY) {
+      return;
+    }
+    if (!this.defaultAuthorization) {
+      log('warn', 'Unauthorized read request blocked due to missing authorization header.');
+      throw new Error('Unauthorized: Invalid or missing authorization header.');
+    }
+  }
+
   async connect(transport: Transport) {
     await this.server.connect(transport);
   }
@@ -266,6 +276,7 @@ class PlantUMLMCPServer {
   private setupToolHandlers() {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
       log('debug', 'ListTools request received');
+      this.assertAuthorizedForRead();
       return {
         tools: [
         {
@@ -288,6 +299,23 @@ class PlantUMLMCPServer {
             },
             required: ['plantuml_code'],
           },
+          outputSchema: {
+            type: 'object',
+            properties: {
+              content: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    type: { type: 'string', enum: ['text'] },
+                    text: { type: 'string' },
+                  },
+                  required: ['type', 'text'],
+                },
+              },
+              isError: { type: 'boolean' },
+            },
+          },
         },
         {
           name: 'encode_plantuml',
@@ -302,6 +330,23 @@ class PlantUMLMCPServer {
             },
             required: ['plantuml_code'],
           },
+          outputSchema: {
+            type: 'object',
+            properties: {
+              content: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    type: { type: 'string', enum: ['text'] },
+                    text: { type: 'string' },
+                  },
+                  required: ['type', 'text'],
+                },
+              },
+              isError: { type: 'boolean' },
+            },
+          },
         },
         {
           name: 'decode_plantuml',
@@ -315,6 +360,23 @@ class PlantUMLMCPServer {
               },
             },
             required: ['encoded_string'],
+          },
+          outputSchema: {
+            type: 'object',
+            properties: {
+              content: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    type: { type: 'string', enum: ['text'] },
+                    text: { type: 'string' },
+                  },
+                  required: ['type', 'text'],
+                },
+              },
+              isError: { type: 'boolean' },
+            },
           },
         },
       ],
@@ -349,6 +411,7 @@ class PlantUMLMCPServer {
   private setupPromptHandlers() {
     this.server.setRequestHandler(ListPromptsRequestSchema, async () => {
       log('debug', 'ListPrompts request received');
+      this.assertAuthorizedForRead();
       return {
         prompts: PROMPTS.map(({ template, ...prompt }) => prompt),
       };
@@ -356,6 +419,7 @@ class PlantUMLMCPServer {
 
     this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
       log('debug', `GetPrompt request for ${request.params.name}`);
+      this.assertAuthorizedForRead();
       const prompt = PROMPTS.find((candidate) => candidate.name === request.params.name);
 
       if (!prompt) {
@@ -630,6 +694,7 @@ async function startSseServer() {
 
         const session = sessions.get(sessionId);
         if (!session) {
+          req.resume();
           res.writeHead(404).end('Unknown session');
           return;
         }

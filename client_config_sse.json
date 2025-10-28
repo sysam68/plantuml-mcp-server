@@ -1,14 +1,8 @@
 {
-  "mcpServers": {
-    "plantuml": {
-      "transport": {
-        "type": "sse",
-        "url": "http://plantuml-mcp:8765/sse",
+         "url": "http://plantuml-mcp:8765/sse",
         "messagesUrl": "http://plantuml-mcp:8765/messages",
         "headers": {
-          "Authorization": "Bearer ${MCP_API_KEY}"
+          "Authorization": "Bearer CBSNc5dr5Eiym5WlJmnECe-lg9SpYUt6YhXKMkbKcGA"
         }
       }
-    }
-  }
-}
+
