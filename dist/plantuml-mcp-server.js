@@ -470,7 +470,9 @@ async function startSseServer() {
                 res.writeHead(400).end('Invalid request');
                 return;
             }
-            const base = `http://${req.headers.host ?? `${MCP_HOST}:${MCP_PORT}`}`;
+            const scheme = req.headers['x-forwarded-proto'] ?? 'http';
+            const hostHeader = req.headers.host ?? `${MCP_HOST}:${MCP_PORT}`;
+            const base = `${scheme}://${hostHeader}`;
             const requestUrl = new URL(req.url, base);
             if (req.method === 'OPTIONS') {
                 res.writeHead(204, {
@@ -490,7 +492,9 @@ async function startSseServer() {
                     return;
                 }
                 const serverInstance = new PlantUMLMCPServer();
-                const transport = new SSEServerTransport(MCP_SSE_MESSAGES_PATH, res);
+                const absoluteMessagesEndpoint = new URL(MCP_SSE_MESSAGES_PATH, base).toString();
+                log('debug', `Advertising SSE message endpoint ${absoluteMessagesEndpoint}`);
+                const transport = new SSEServerTransport(absoluteMessagesEndpoint, res);
                 sessions.set(transport.sessionId, {
                     transport,
                     instance: serverInstance,
