@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "plantuml": {
+      "command": "node",
+      "args": [
+        "./dist/plantuml-mcp-server.js"
+      ],
+      "cwd": ".",
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "LOG_LEVEL": "info",
+        "PLANTUML_SERVER_URL": "https://www.plantuml.com/plantuml",
+        "MCP_API_KEY": "${MCP_API_KEY}"
+      }
+    }
+  }
+}

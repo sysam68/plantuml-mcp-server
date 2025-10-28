@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import http from 'node:http';
+import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { URL } from 'node:url';
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -13,7 +13,9 @@ import {
   ListPromptsRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import * as contentType from 'content-type';
 import plantumlEncoder from 'plantuml-encoder';
+import getRawBody from 'raw-body';
 
 const LOG_LEVELS = ['error', 'warn', 'info', 'debug'] as const;
 type LogLevel = (typeof LOG_LEVELS)[number];
@@ -59,6 +61,14 @@ const MCP_HOST = process.env.MCP_HOST || '0.0.0.0';
 const MCP_PORT = Number.parseInt(process.env.MCP_PORT || '3000', 10);
 const MCP_SSE_PATH = normalizePath(process.env.MCP_SSE_PATH || '/sse');
 const MCP_SSE_MESSAGES_PATH = normalizePath(process.env.MCP_SSE_MESSAGES_PATH || '/messages');
+const MCP_API_KEY = process.env.MCP_API_KEY;
+const MAXIMUM_MESSAGE_SIZE = '4mb';
+
+if (MCP_API_KEY) {
+  log('info', 'MCP API key authentication enabled.');
+} else {
+  log('warn', 'MCP_API_KEY not set. Server will accept unauthenticated requests.');
+}
 
 type PromptArgument = {
   name: string;
@@ -181,6 +191,34 @@ function decodePlantUML(encoded: string): string {
   return plantumlEncoder.decode(encoded);
 }
 
+function isValidAuthorizationHeader(header: string | undefined | null): boolean {
+  if (!MCP_API_KEY) {
+    return true;
+  }
+  return header === `Bearer ${MCP_API_KEY}`;
+}
+
+function unauthorizedResponse() {
+  return {
+    content: [{ type: 'text', text: 'Unauthorized: Invalid or missing authorization header.' }],
+    isError: true,
+  } as const;
+}
+
+function extractAuthorizationHeader(request: unknown): string | undefined {
+  if (!request || typeof request !== 'object') {
+    return undefined;
+  }
+
+  const headers = (request as { headers?: unknown }).headers;
+  if (!headers || typeof headers !== 'object') {
+    return undefined;
+  }
+
+  const authorization = (headers as Record<string, unknown>).authorization;
+  return typeof authorization === 'string' ? authorization : undefined;
+}
+
 class PlantUMLMCPServer {
   private server: Server;
 
@@ -273,6 +311,13 @@ class PlantUMLMCPServer {
       const { name } = request.params;
       const args = (request.params.arguments ?? {}) as Record<string, unknown>;
       log('debug', `CallTool request received: ${name}`);
+      log('debug', `Request arguments: ${JSON.stringify(args)}`);
+
+      const authorization = extractAuthorizationHeader(request);
+      if (!isValidAuthorizationHeader(authorization)) {
+        log('warn', `Unauthorized CallTool request blocked for tool ${name ?? '<unknown>'}.`);
+        return unauthorizedResponse();
+      }
 
       switch (name) {
         case 'generate_plantuml_diagram':
@@ -489,8 +534,13 @@ async function startSseServer() {
     {
       transport: SSEServerTransport;
       instance: PlantUMLMCPServer;
+      authorization?: string;
     }
   >();
+
+  const rejectUnauthorized = (res: ServerResponse, reason: string) => {
+    res.writeHead(401, { 'Content-Type': 'text/plain' }).end(reason);
+  };
 
   const httpServer = http.createServer(async (req, res) => {
     try {
@@ -515,10 +565,20 @@ async function startSseServer() {
       if (req.method === 'GET' && requestUrl.pathname === MCP_SSE_PATH) {
         res.setHeader('Access-Control-Allow-Origin', '*');
 
+        if (!isValidAuthorizationHeader(req.headers.authorization)) {
+          log('warn', 'Rejected SSE connection due to invalid or missing authorization header.');
+          rejectUnauthorized(res, 'Unauthorized');
+          return;
+        }
+
         const serverInstance = new PlantUMLMCPServer();
         const transport = new SSEServerTransport(MCP_SSE_MESSAGES_PATH, res);
 
-        sessions.set(transport.sessionId, { transport, instance: serverInstance });
+        sessions.set(transport.sessionId, {
+          transport,
+          instance: serverInstance,
+          authorization: req.headers.authorization ?? undefined,
+        });
 
         serverInstance.onClose(() => {
           sessions.delete(transport.sessionId);
@@ -549,7 +609,14 @@ async function startSseServer() {
           return;
         }
 
-        await session.transport.handlePostMessage(req, res);
+        const incomingAuthorization = req.headers.authorization ?? session.authorization;
+        if (!isValidAuthorizationHeader(incomingAuthorization)) {
+          log('warn', `Rejected SSE message for session ${sessionId} due to invalid authorization header.`);
+          rejectUnauthorized(res, 'Unauthorized');
+          return;
+        }
+
+        await handleSsePostMessage(session, req, res);
         return;
       }
 
@@ -606,6 +673,60 @@ async function startSseServer() {
     process.once('SIGINT', shutdown);
     process.once('SIGTERM', shutdown);
   });
+}
+
+async function handleSsePostMessage(
+  session: {
+    transport: SSEServerTransport;
+    instance: PlantUMLMCPServer;
+    authorization?: string;
+  },
+  req: IncomingMessage,
+  res: ServerResponse,
+) {
+  let body: string;
+
+  try {
+    const ct = contentType.parse(req.headers['content-type'] ?? 'application/json');
+    if (ct.type !== 'application/json') {
+      res.writeHead(400).end('Unsupported content-type');
+      return;
+    }
+
+    body = await getRawBody(req, {
+      limit: MAXIMUM_MESSAGE_SIZE,
+      encoding: ct.parameters.charset ?? 'utf-8',
+    });
+  } catch (error) {
+    log('warn', 'Failed to read SSE message body', error);
+    res.writeHead(400).end('Invalid request body');
+    return;
+  }
+
+  let message: unknown;
+  try {
+    message = JSON.parse(body);
+  } catch (error) {
+    log('warn', 'Failed to parse SSE JSON payload', error);
+    res.writeHead(400).end('Invalid JSON payload');
+    return;
+  }
+
+  if (message && typeof message === 'object') {
+    (message as Record<string, unknown>).headers = {
+      authorization: req.headers.authorization ?? session.authorization,
+    };
+  }
+
+  try {
+    await session.transport.handleMessage(message);
+  } catch (error) {
+    log('error', 'Failed to handle SSE message', error);
+    res.writeHead(500).end('Internal server error');
+    return;
+  }
+
+  res.writeHead(202).end('Accepted');
 }
 
 async function start() {
