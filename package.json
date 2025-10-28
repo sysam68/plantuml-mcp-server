@@ -1,16 +1,16 @@
 {
   "name": "plantuml-mcp-server",
-  "version": "0.1.11",
+  "version": "0.1.3",
   "description": "MCP server for generating PlantUML diagrams",
   "author": "mzagar",
   "license": "MIT",
-  "homepage": "https://github.com/infobip/plantuml-mcp-server#readme",
+  "homepage": "https://github.com/mzagar/plantuml-mcp-server#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/infobip/plantuml-mcp-server.git"
+    "url": "git+https://github.com/mzagar/plantuml-mcp-server.git"
   },
   "bugs": {
-    "url": "https://github.com/infobip/plantuml-mcp-server/issues"
+    "url": "https://github.com/mzagar/plantuml-mcp-server/issues"
   },
   "type": "module",
   "main": "dist/plantuml-mcp-server.js",
@@ -26,11 +26,9 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "node dist/plantuml-mcp-server.js",
-    "prepublishOnly": "npm run build",
-    "prepare": "npm run build",
-    "smithery:build": "npx @smithery/cli build",
-    "smithery:dev": "npx @smithery/cli dev",
-    "lint": "eslint src --ext .ts"
+    "start:stdio": "MCP_TRANSPORT=stdio node dist/plantuml-mcp-server.js",
+    "start:sse": "MCP_TRANSPORT=sse node dist/plantuml-mcp-server.js",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "mcp",

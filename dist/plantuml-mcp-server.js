@@ -1,164 +1,530 @@
 #!/usr/bin/env node
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import plantumlEncoder from "plantuml-encoder";
-// --- Logger setup ---
-const LOG_LEVELS = ["error", "warn", "info", "debug"];
-const LOG_LEVEL = process.env.LOG_LEVEL || "info";
-const currentLogLevelIndex = LOG_LEVELS.indexOf(LOG_LEVEL);
-function log(level, message) {
-    if (LOG_LEVELS.indexOf(level) <= currentLogLevelIndex) {
-        console.error(`[${level.toUpperCase()}] ${message}`);
+import http from 'node:http';
+import { URL } from 'node:url';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { CallToolRequestSchema, GetPromptRequestSchema, ListPromptsRequestSchema, ListToolsRequestSchema, } from '@modelcontextprotocol/sdk/types.js';
+import plantumlEncoder from 'plantuml-encoder';
+const LOG_LEVELS = ['error', 'warn', 'info', 'debug'];
+function normalizePath(path) {
+    return path.startsWith('/') ? path : `/${path}`;
+}
+const requestedLogLevel = (process.env.LOG_LEVEL || 'info').toLowerCase();
+const logLevelIndex = LOG_LEVELS.indexOf(requestedLogLevel) !== -1 ? LOG_LEVELS.indexOf(requestedLogLevel) : LOG_LEVELS.indexOf('info');
+function log(level, message, error) {
+    if (LOG_LEVELS.indexOf(level) > logLevelIndex) {
+        return;
+    }
+    const prefix = `[${level.toUpperCase()}]`;
+    const text = `${prefix} ${message}`;
+    if (level === 'error') {
+        if (error instanceof Error && error.stack) {
+            console.error(`${text}\n${error.stack}`);
+        }
+        else if (error) {
+            console.error(`${text} ${String(error)}`);
+        }
+        else {
+            console.error(text);
+        }
+        return;
+    }
+    if (level === 'warn') {
+        console.warn(text);
+    }
+    else {
+        console.info(text);
     }
 }
-// --- Environment variables ---
-const MCP_API_KEY = process.env.MCP_API_KEY;
-const MCP_PORT = process.env.MCP_PORT || "3000";
-const NODE_ENV = process.env.NODE_ENV || "development";
-if (!MCP_API_KEY) {
-    log("warn", "MCP_API_KEY is not defined. Authentication will be disabled.");
+const SERVER_VERSION = process.env.npm_package_version || '0.1.3';
+const PLANTUML_SERVER_URL = process.env.PLANTUML_SERVER_URL || 'https://www.plantuml.com/plantuml';
+const MCP_TRANSPORT = (process.env.MCP_TRANSPORT || 'stdio').toLowerCase();
+const MCP_HOST = process.env.MCP_HOST || '0.0.0.0';
+const MCP_PORT = Number.parseInt(process.env.MCP_PORT || '3000', 10);
+const MCP_SSE_PATH = normalizePath(process.env.MCP_SSE_PATH || '/sse');
+const MCP_SSE_MESSAGES_PATH = normalizePath(process.env.MCP_SSE_MESSAGES_PATH || '/messages');
+const PLANTUML_ERROR_PROMPT_BODY = `## PlantUML MCP Server - Error Handling & Auto-Fix Guide
+
+### Error Detection Workflow
+1. Always attempt diagram generation first with \`generate_plantuml_diagram\`
+2. Inspect the response for \`validation_failed: true\`
+3. Extract detailed error context from \`error_details\`
+4. Apply auto-fixes when safe and retry up to two times
+5. Surface the error to the user with guidance if all retries fail
+
+### Response Format Recognition
+
+**Success Response**
+- Returns embeddable URLs and markdown
+- Includes the text \`Successfully generated PlantUML diagram!\`
+
+**Validation Error Response**
+\`\`\`json
+{
+  "validation_failed": true,
+  "error_details": {
+    "error_message": "Syntax Error description",
+    "error_line": 3,
+    "problematic_code": "invalid syntax line",
+    "full_plantuml": "complete original code",
+    "full_context": "detailed error context"
+  },
+  "retry_instructions": "Fix errors and retry"
 }
-else {
-    log("info", "MCP_API_KEY is set.");
+\`\`\`
+
+**Server Error Response**
+- Indicates connectivity issues or PlantUML server downtime
+
+### Common PlantUML Syntax Fixes
+- Missing \`@startuml\` or \`@enduml\`
+- Invalid arrow syntax (use \`->\`, \`-->\`, \`<-\`, etc.)
+- Keywords with typos (participant, class, note, etc.)
+- Missing quotes around strings that contain spaces
+- Using diagram elements that do not match the diagram type
+
+### Auto-Fix Strategy
+1. Read \`error_message\`, \`error_line\`, and \`problematic_code\`
+2. Apply targeted corrections (add tags, fix arrows, add quotes, fix typos)
+3. Preserve the user's original intent wherever possible
+4. Retry generation once corrections are applied
+5. Explain any fixes made when presenting the final result
+
+### Error Handling Helper (pseudocode)
+\`\`\`typescript
+const result = await generatePlantUMLDiagram(code);
+if (isValidationError(result)) {
+  const fixed = autoFixSyntax(result.error_details);
+  if (fixed) {
+    return await generatePlantUMLDiagram(fixed);
+  }
+  return showErrorToUser(result.error_details);
 }
-log("info", `Server will run on port: ${MCP_PORT}`);
-log("info", `Environment mode: ${NODE_ENV}`);
-// --- Tools definitions (PlantUML specific) ---
-const TOOLS = [
-    {
-        name: "generate_plantuml_diagram",
-        description: "Generate a PlantUML diagram (SVG or PNG) from UML source code.",
-        inputSchema: {
-            type: "object",
-            properties: {
-                plantuml_code: {
-                    type: "string",
-                    description: "PlantUML code to convert.",
-                },
-                format: {
-                    type: "string",
-                    enum: ["svg", "png"],
-                    default: "svg",
-                    description: "Output format.",
-                },
-            },
-            required: ["plantuml_code"],
-        },
-    },
-    {
-        name: "encode_plantuml",
-        description: "Encode PlantUML text for use in a PlantUML server URL.",
-        inputSchema: {
-            type: "object",
-            properties: {
-                plantuml_code: { type: "string", description: "PlantUML code to encode." },
-            },
-            required: ["plantuml_code"],
-        },
-    },
-    {
-        name: "decode_plantuml",
-        description: "Decode a PlantUML-encoded string back to source text.",
-        inputSchema: {
-            type: "object",
-            properties: {
-                encoded_string: { type: "string", description: "Encoded PlantUML string." },
-            },
-            required: ["encoded_string"],
-        },
-    },
-];
-// --- Prompts definitions ---
+return result; // Success path
+\`\`\`
+
+### Best Practices
+- Do not share invalid diagram URLs with users
+- Store the original code before attempting fixes
+- Provide clear feedback on what was corrected
+- Offer manual follow-up steps if automatic fixes fail
+`;
 const PROMPTS = [
     {
-        name: "plantuml_error_handling",
-        description: "Tips for fixing PlantUML syntax errors.",
+        name: 'plantuml_error_handling',
+        description: 'Guidelines for handling PlantUML syntax errors and implementing auto-fix workflows.',
+        arguments: [
+            {
+                name: 'error_message',
+                description: 'Latest PlantUML error message (optional).',
+            },
+            {
+                name: 'plantuml_code',
+                description: 'PlantUML input that triggered the error (optional).',
+            },
+        ],
+        template: (args = {}) => {
+            const contextParts = [];
+            if (args.error_message) {
+                contextParts.push(`Latest PlantUML error message:\n> ${args.error_message}`);
+            }
+            if (args.plantuml_code) {
+                contextParts.push(`PlantUML input that triggered the error:\n\`\`\`plantuml\n${args.plantuml_code}\n\`\`\``);
+            }
+            const context = contextParts.length > 0 ? `${contextParts.join('\n\n')}\n\n---\n\n` : '';
+            return `${context}${PLANTUML_ERROR_PROMPT_BODY}`;
+        },
     },
 ];
-// --- Tool Logic ---
-const PLANTUML_SERVER_URL = process.env.PLANTUML_SERVER_URL || "http://plantuml:8080/plantuml";
-async function generatePlantUMLDiagram(args) {
-    const { plantuml_code, format = "svg" } = args;
-    log("debug", "Encoding PlantUML code for diagram generation");
-    const encoded = plantumlEncoder.encode(plantuml_code);
-    const diagramUrl = `${PLANTUML_SERVER_URL}/${format}/${encoded}`;
-    return `✅ Generated PlantUML diagram:\n${diagramUrl}\n\nMarkdown:\n\`\`\`markdown\n![Diagram](${diagramUrl})\n\`\`\``;
+function encodePlantUML(plantuml) {
+    return plantumlEncoder.encode(plantuml);
 }
-function encodePlantUML(args) {
-    log("debug", "Encoding PlantUML code");
-    const encoded = plantumlEncoder.encode(args.plantuml_code);
-    return `Encoded string:\n\`${encoded}\`\nURL: ${PLANTUML_SERVER_URL}/svg/${encoded}`;
+function decodePlantUML(encoded) {
+    return plantumlEncoder.decode(encoded);
 }
-function decodePlantUML(args) {
-    log("debug", "Decoding PlantUML encoded string");
-    const decoded = plantumlEncoder.decode(args.encoded_string);
-    return `Decoded PlantUML:\n\`\`\`plantuml\n${decoded}\n\`\`\``;
-}
-// --- Server setup  ---
-const server = new Server({
-    name: "plantuml-mcp-server",
-    version: "1.0.0",
-    capabilities: {
-        tools: {},
-    },
-});
-// --- Handle requests ---
-server.setRequestHandler(ListToolsRequestSchema, async () => {
-    log("debug", "Received ListTools request");
-    return {
-        tools: TOOLS,
-    };
-});
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    log("debug", `Received CallTool request for tool: ${request.params.name}`);
-    log("debug", `Request arguments: ${JSON.stringify(request.params.arguments)}`);
-    // Authentication check
-    if (MCP_API_KEY) {
-        const headers = request.headers;
-        const authHeader = headers?.authorization;
-        if (!authHeader || authHeader !== `Bearer ${MCP_API_KEY}`) {
-            log("warn", "Unauthorized CallTool request blocked due to missing or invalid authorization header.");
+class PlantUMLMCPServer {
+    server;
+    constructor() {
+        this.server = new Server({
+            name: 'plantuml-server',
+            version: SERVER_VERSION,
+            capabilities: {
+                tools: {},
+                prompts: {},
+            },
+        });
+        this.setupToolHandlers();
+        this.setupPromptHandlers();
+    }
+    async connect(transport) {
+        await this.server.connect(transport);
+    }
+    async close() {
+        await this.server.close();
+    }
+    onClose(handler) {
+        this.server.onclose = handler;
+    }
+    onError(handler) {
+        this.server.onerror = handler;
+    }
+    setupToolHandlers() {
+        this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
+            tools: [
+                {
+                    name: 'generate_plantuml_diagram',
+                    description: 'Generate a PlantUML diagram with syntax validation. Returns diagram URLs on success or structured errors for auto-fix workflows.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            plantuml_code: {
+                                type: 'string',
+                                description: 'PlantUML diagram code that will be validated and rendered.',
+                            },
+                            format: {
+                                type: 'string',
+                                enum: ['svg', 'png'],
+                                default: 'svg',
+                                description: 'Output image format.',
+                            },
+                        },
+                        required: ['plantuml_code'],
+                    },
+                },
+                {
+                    name: 'encode_plantuml',
+                    description: 'Encode PlantUML code for usage in URLs or PlantUML servers.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            plantuml_code: {
+                                type: 'string',
+                                description: 'PlantUML diagram code to encode.',
+                            },
+                        },
+                        required: ['plantuml_code'],
+                    },
+                },
+                {
+                    name: 'decode_plantuml',
+                    description: 'Decode an encoded PlantUML string back to PlantUML source.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            encoded_string: {
+                                type: 'string',
+                                description: 'Encoded PlantUML string to decode.',
+                            },
+                        },
+                        required: ['encoded_string'],
+                    },
+                },
+            ],
+        }));
+        this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+            const { name } = request.params;
+            const args = (request.params.arguments ?? {});
+            log('debug', `CallTool request received: ${name}`);
+            switch (name) {
+                case 'generate_plantuml_diagram':
+                    return this.generateDiagram(args);
+                case 'encode_plantuml':
+                    return this.encodePlantuml(args);
+                case 'decode_plantuml':
+                    return this.decodePlantuml(args);
+                default:
+                    throw new Error(`Unknown tool: ${name}`);
+            }
+        });
+    }
+    setupPromptHandlers() {
+        this.server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+            prompts: PROMPTS.map(({ template, ...prompt }) => prompt),
+        }));
+        this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+            const prompt = PROMPTS.find((candidate) => candidate.name === request.params.name);
+            if (!prompt) {
+                throw new Error(`Unknown prompt: ${request.params.name}`);
+            }
+            const args = request.params.arguments ?? {};
+            const text = prompt.template(args);
             return {
-                content: [{ type: "text", text: "Unauthorized: Invalid or missing authorization header." }],
+                description: prompt.description,
+                messages: [
+                    {
+                        role: 'assistant',
+                        content: {
+                            type: 'text',
+                            text,
+                        },
+                    },
+                ],
+            };
+        });
+    }
+    async validatePlantUMLSyntax(encoded, originalCode) {
+        try {
+            const validationUrl = `${PLANTUML_SERVER_URL}/txt/${encoded}`;
+            const response = await fetch(validationUrl);
+            const errorMessage = response.headers.get('x-plantuml-diagram-error');
+            if (!errorMessage) {
+                return { isValid: true };
+            }
+            const errorLineHeader = response.headers.get('x-plantuml-diagram-error-line');
+            const fullTextOutput = await response.text();
+            const lines = originalCode.split('\n');
+            const lineNumber = errorLineHeader ? Number.parseInt(errorLineHeader, 10) : undefined;
+            const problematicCode = lineNumber && lineNumber > 0 && lineNumber <= lines.length ? lines[lineNumber - 1]?.trim() ?? '' : '';
+            log('debug', `Validation failed: ${errorMessage} at line ${lineNumber ?? 'unknown'}`);
+            return {
+                isValid: false,
+                error: {
+                    message: errorMessage,
+                    line: Number.isNaN(lineNumber) ? undefined : lineNumber,
+                    problematic_code: problematicCode,
+                    full_plantuml: originalCode,
+                    full_context: fullTextOutput,
+                },
+            };
+        }
+        catch (error) {
+            log('warn', 'Validation endpoint failed, falling back to generation-only flow.', error);
+            return { isValid: true };
+        }
+    }
+    async generateDiagram(args) {
+        const plantumlCode = typeof args.plantuml_code === 'string' ? args.plantuml_code : undefined;
+        const format = typeof args.format === 'string' ? args.format : 'svg';
+        if (!plantumlCode) {
+            throw new Error('plantuml_code is required');
+        }
+        try {
+            const encoded = encodePlantUML(plantumlCode);
+            const validation = await this.validatePlantUMLSyntax(encoded, plantumlCode);
+            if (!validation.isValid && validation.error) {
+                return {
+                    content: [
+                        {
+                            type: 'text',
+                            text: JSON.stringify({
+                                validation_failed: true,
+                                error_details: {
+                                    error_message: validation.error.message,
+                                    error_line: validation.error.line,
+                                    problematic_code: validation.error.problematic_code,
+                                    full_plantuml: validation.error.full_plantuml,
+                                    full_context: validation.error.full_context,
+                                },
+                                retry_instructions: 'The PlantUML code has syntax errors. Please fix the errors and retry with corrected syntax.',
+                            }, null, 2),
+                        },
+                    ],
+                    isError: true,
+                };
+            }
+            const diagramUrl = `${PLANTUML_SERVER_URL}/${format}/${encoded}`;
+            const response = await fetch(diagramUrl);
+            if (!response.ok) {
+                throw new Error(`PlantUML server returned ${response.status}: ${response.statusText}`);
+            }
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: `Successfully generated PlantUML diagram!\n\n**Embeddable ${format.toUpperCase()} URL:**\n\`\`\`\n${diagramUrl}\n\`\`\`\n\n**Markdown embed:**\n\`\`\`markdown\n![PlantUML Diagram](${diagramUrl})\n\`\`\``,
+                    },
+                ],
+            };
+        }
+        catch (error) {
+            log('error', 'Error generating PlantUML diagram', error);
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: `Error generating PlantUML diagram: ${error instanceof Error ? error.message : String(error)}`,
+                    },
+                ],
                 isError: true,
             };
         }
     }
-    try {
-        const { name, arguments: args } = request.params;
-        let result;
-        switch (name) {
-            case "generate_plantuml_diagram":
-                log("debug", "Calling generate_plantuml_diagram tool");
-                result = await generatePlantUMLDiagram(args);
-                break;
-            case "encode_plantuml":
-                log("debug", "Calling encode_plantuml tool");
-                result = encodePlantUML(args);
-                break;
-            case "decode_plantuml":
-                log("debug", "Calling decode_plantuml tool");
-                result = decodePlantUML(args);
-                break;
-            default:
-                log("warn", `Unknown tool requested: ${name}`);
-                return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
+    async encodePlantuml(args) {
+        const plantumlCode = typeof args.plantuml_code === 'string' ? args.plantuml_code : undefined;
+        if (!plantumlCode) {
+            throw new Error('plantuml_code is required');
         }
-        log("debug", `Tool result: ${result}`);
-        return { content: [{ type: "text", text: result }] };
+        try {
+            const encoded = encodePlantUML(plantumlCode);
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: `**Encoded PlantUML:**\n\`\`\`\n${encoded}\n\`\`\`\n\n**Full SVG URL:**\n\`\`\`\n${PLANTUML_SERVER_URL}/svg/${encoded}\n\`\`\`\n\n**Full PNG URL:**\n\`\`\`\n${PLANTUML_SERVER_URL}/png/${encoded}\n\`\`\``,
+                    },
+                ],
+            };
+        }
+        catch (error) {
+            log('error', 'Error encoding PlantUML', error);
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: `Error encoding PlantUML: ${error instanceof Error ? error.message : String(error)}`,
+                    },
+                ],
+                isError: true,
+            };
+        }
     }
-    catch (error) {
-        const errMsg = error instanceof Error ? error.message : String(error);
-        log("error", `Error handling CallTool request: ${errMsg}`);
-        return {
-            content: [{ type: "text", text: `Error processing request: ${errMsg}` }],
-            isError: true,
+    async decodePlantuml(args) {
+        const encodedString = typeof args.encoded_string === 'string' ? args.encoded_string : undefined;
+        if (!encodedString) {
+            throw new Error('encoded_string is required');
+        }
+        try {
+            const decoded = decodePlantUML(encodedString);
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: `**Decoded PlantUML:**\n\`\`\`plantuml\n${decoded}\n\`\`\``,
+                    },
+                ],
+            };
+        }
+        catch (error) {
+            log('error', 'Error decoding PlantUML', error);
+            return {
+                content: [
+                    {
+                        type: 'text',
+                        text: `Error decoding PlantUML: ${error instanceof Error ? error.message : String(error)}`,
+                    },
+                ],
+                isError: true,
+            };
+        }
+    }
+}
+async function startSseServer() {
+    const sessions = new Map();
+    const httpServer = http.createServer(async (req, res) => {
+        try {
+            if (!req.url) {
+                res.writeHead(400).end('Invalid request');
+                return;
+            }
+            const base = `http://${req.headers.host ?? `${MCP_HOST}:${MCP_PORT}`}`;
+            const requestUrl = new URL(req.url, base);
+            if (req.method === 'OPTIONS') {
+                res.writeHead(204, {
+                    'Access-Control-Allow-Origin': '*',
+                    'Access-Control-Allow-Headers': 'content-type, authorization',
+                    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+                });
+                res.end();
+                return;
+            }
+            if (req.method === 'GET' && requestUrl.pathname === MCP_SSE_PATH) {
+                res.setHeader('Access-Control-Allow-Origin', '*');
+                const serverInstance = new PlantUMLMCPServer();
+                const transport = new SSEServerTransport(MCP_SSE_MESSAGES_PATH, res);
+                sessions.set(transport.sessionId, { transport, instance: serverInstance });
+                serverInstance.onClose(() => {
+                    sessions.delete(transport.sessionId);
+                    log('info', `SSE session closed: ${transport.sessionId}`);
+                });
+                serverInstance.onError((error) => {
+                    log('error', `Unhandled error in SSE session ${transport.sessionId}`, error);
+                });
+                await serverInstance.connect(transport);
+                log('info', `SSE session started: ${transport.sessionId}`);
+                return;
+            }
+            if (req.method === 'POST' && requestUrl.pathname === MCP_SSE_MESSAGES_PATH) {
+                res.setHeader('Access-Control-Allow-Origin', '*');
+                const sessionId = requestUrl.searchParams.get('sessionId');
+                if (!sessionId) {
+                    res.writeHead(400).end('Missing sessionId');
+                    return;
+                }
+                const session = sessions.get(sessionId);
+                if (!session) {
+                    res.writeHead(404).end('Unknown session');
+                    return;
+                }
+                await session.transport.handlePostMessage(req, res);
+                return;
+            }
+            if (req.method === 'GET' && requestUrl.pathname === '/healthz') {
+                res.writeHead(200, { 'Content-Type': 'text/plain' }).end('ok');
+                return;
+            }
+            res.writeHead(404).end('Not found');
+        }
+        catch (error) {
+            log('error', 'HTTP server error', error);
+            if (!res.headersSent) {
+                res.writeHead(500).end('Internal server error');
+            }
+            else {
+                res.end();
+            }
+        }
+    });
+    await new Promise((resolve, reject) => {
+        httpServer.on('error', (error) => {
+            log('error', 'HTTP server error', error);
+            reject(error);
+        });
+        httpServer.listen(MCP_PORT, MCP_HOST, () => {
+            log('info', `PlantUML MCP server (SSE transport) listening on http://${MCP_HOST}:${MCP_PORT}${MCP_SSE_PATH}`);
+        });
+        const shutdown = async () => {
+            log('info', 'Shutdown signal received, closing server.');
+            try {
+                await Promise.all(Array.from(sessions.values()).map(async ({ instance }) => {
+                    try {
+                        await instance.close();
+                    }
+                    catch (error) {
+                        log('warn', 'Error closing session during shutdown', error);
+                    }
+                }));
+            }
+            finally {
+                httpServer.close((closeError) => {
+                    if (closeError) {
+                        reject(closeError);
+                        return;
+                    }
+                    resolve();
+                });
+            }
         };
+        process.once('SIGINT', shutdown);
+        process.once('SIGTERM', shutdown);
+    });
+}
+async function start() {
+    if (MCP_TRANSPORT === 'stdio') {
+        const server = new PlantUMLMCPServer();
+        const transport = new StdioServerTransport();
+        await server.connect(transport);
+        log('info', 'PlantUML MCP server running on stdio transport');
+        return;
     }
+    if (MCP_TRANSPORT === 'sse') {
+        await startSseServer();
+        return;
+    }
+    throw new Error(`Unsupported MCP_TRANSPORT value: ${MCP_TRANSPORT}`);
+}
+start().catch((error) => {
+    log('error', 'PlantUML MCP server failed to start', error);
+    process.exitCode = 1;
 });
-// --- Start server (STDIO transport) ---
-const transport = new StdioServerTransport();
-await server.connect(transport);
-log("info", "🌿 PlantUML MCP Server running via stdio");
 //# sourceMappingURL=plantuml-mcp-server.js.map
