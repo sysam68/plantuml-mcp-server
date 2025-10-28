@@ -33,7 +33,8 @@ function log(level: LogLevel, message: string, error?: unknown) {
     return;
   }
 
-  const prefix = `[${level.toUpperCase()}]`;
+  const timestamp = new Date().toISOString();
+  const prefix = `[${timestamp}] [${level.toUpperCase()}]`;
   const text = `${prefix} ${message}`;
 
   if (level === 'error') {
