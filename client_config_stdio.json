@@ -14,3 +14,18 @@
     }
   }
 }
+
+{
+  "mcpServerConfig": {
+    "type": "stdio",
+    "command": "node",
+    "args": [
+      "/root/.flowise/mcp-servers/plantuml-mcp-server/dist/plantuml-mcp-server.js"
+    ],
+    "env": {
+      "MCP_TRANSPORT": "stdio",
+      "PLANTUML_SERVER_URL": "http://plantuml-server:8080"
+      // 
+    }
+  }
+}
