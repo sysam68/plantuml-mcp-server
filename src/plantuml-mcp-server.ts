@@ -21,6 +21,7 @@ import {
 import * as contentType from 'content-type';
 import plantumlEncoder from 'plantuml-encoder';
 import getRawBody from 'raw-body';
+import { normalizeSchemaTypes } from './utils/schemaNormalizer.js';
 
 const LOG_LEVELS = ['emergency', 'alert', 'critical', 'error', 'warning', 'notice', 'info', 'debug'] as const;
 type LogLevel = (typeof LOG_LEVELS)[number];
@@ -459,8 +460,7 @@ class PlantUMLMCPServer {
         return { tools: [] };
       }
 
-      return {
-        tools: [
+      const tools = [
           {
             name: 'generate_plantuml_diagram',
             title: 'Generate PlantUML Diagram',
@@ -557,8 +557,9 @@ class PlantUMLMCPServer {
               required: ['success'],
             },
           },
-        ],
-      };
+        ];
+
+      return normalizeSchemaTypes({ tools }) as { tools: typeof tools };
     });
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {

@@ -1,0 +1,13 @@
+{
+  "timestamp": "2025-10-30T11:55:43.273316Z",
+  "command": "npx",
+  "args": [
+    "-y",
+    "plantuml-mcp-server"
+  ],
+  "exit_code": 0,
+  "uML_sample": "\n@startuml\nactor User\nUser -> System : Request\nSystem --> User : Response\n@enduml\n",
+  "stdout_raw": "[2025-10-30T11:55:43.263Z] [INFO] Log level set to info\n[2025-10-30T11:55:43.264Z] [INFO] PlantUML MCP server running on stdio transport\n",
+  "stderr_raw": "[2025-10-30T11:55:43.264Z] [WARNING] MCP_API_KEY not set. Server will accept unauthenticated requests.\n",
+  "stdout_parsed": []
+}

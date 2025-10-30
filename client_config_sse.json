@@ -1,8 +1,8 @@
 {
-         "url": "http://plantuml-mcp:8765/sse",
-        "messagesUrl": "http://plantuml-mcp:8765/messages",
-        "headers": {
-          "Authorization": "Bearer CBSNc5dr5Eiym5WlJmnECe-lg9SpYUt6YhXKMkbKcGA"
-        }
-      }
+  "url": "http://plantuml-mcp:8765/sse",
+  "messagesUrl": "http://plantuml-mcp:8765/messages",
+  "headers": {
+    "Authorization": "Bearer 1234"
+  }
+}
 
