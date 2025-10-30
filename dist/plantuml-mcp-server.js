@@ -8,6 +8,7 @@ import { CallToolRequestSchema, CompleteRequestSchema, GetPromptRequestSchema, L
 import * as contentType from 'content-type';
 import plantumlEncoder from 'plantuml-encoder';
 import getRawBody from 'raw-body';
+import { normalizeSchemaTypes } from './utils/schemaNormalizer.js';
 const LOG_LEVELS = ['emergency', 'alert', 'critical', 'error', 'warning', 'notice', 'info', 'debug'];
 const LOG_LEVEL_ALIASES = {
     warn: 'warning',
@@ -367,105 +368,104 @@ class PlantUMLMCPServer {
                 this.log('debug', `Ignoring unsupported tools cursor "${request.params.cursor}" (no additional pages).`);
                 return { tools: [] };
             }
-            return {
-                tools: [
-                    {
-                        name: 'generate_plantuml_diagram',
-                        title: 'Generate PlantUML Diagram',
-                        description: 'Generate a PlantUML diagram with syntax validation. Returns diagram URLs on success or structured errors for auto-fix workflows.',
-                        inputSchema: {
-                            type: 'object',
-                            properties: {
-                                plantuml_code: {
-                                    type: 'string',
-                                    description: 'PlantUML diagram code that will be validated and rendered.',
-                                },
-                                format: {
-                                    type: 'string',
-                                    enum: ['svg', 'png'],
-                                    default: 'svg',
-                                    description: 'Output image format.',
-                                },
+            const tools = [
+                {
+                    name: 'generate_plantuml_diagram',
+                    title: 'Generate PlantUML Diagram',
+                    description: 'Generate a PlantUML diagram with syntax validation. Returns diagram URLs on success or structured errors for auto-fix workflows.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            plantuml_code: {
+                                type: 'string',
+                                description: 'PlantUML diagram code that will be validated and rendered.',
                             },
-                            required: ['plantuml_code'],
-                        },
-                        outputSchema: {
-                            type: 'object',
-                            properties: {
-                                success: { type: 'boolean' },
-                                format: { type: 'string', enum: ['svg', 'png'] },
-                                diagram_url: { type: 'string', format: 'uri' },
-                                markdown_embed: { type: 'string' },
-                                encoded_diagram: { type: 'string' },
-                                validation_failed: { type: 'boolean' },
-                                error_details: {
-                                    type: 'object',
-                                    properties: {
-                                        error_message: { type: 'string' },
-                                        error_line: { type: 'integer' },
-                                        problematic_code: { type: 'string' },
-                                        full_plantuml: { type: 'string' },
-                                        full_context: { type: 'string' },
-                                    },
-                                },
-                                retry_instructions: { type: 'string' },
-                                error_message: { type: 'string' },
+                            format: {
+                                type: 'string',
+                                enum: ['svg', 'png'],
+                                default: 'svg',
+                                description: 'Output image format.',
                             },
-                            required: ['success'],
                         },
+                        required: ['plantuml_code'],
                     },
-                    {
-                        name: 'encode_plantuml',
-                        title: 'Encode PlantUML',
-                        description: 'Encode PlantUML code for usage in URLs or PlantUML servers.',
-                        inputSchema: {
-                            type: 'object',
-                            properties: {
-                                plantuml_code: {
-                                    type: 'string',
-                                    description: 'PlantUML diagram code to encode.',
+                    outputSchema: {
+                        type: 'object',
+                        properties: {
+                            success: { type: 'boolean' },
+                            format: { type: 'string', enum: ['svg', 'png'] },
+                            diagram_url: { type: 'string', format: 'uri' },
+                            markdown_embed: { type: 'string' },
+                            encoded_diagram: { type: 'string' },
+                            validation_failed: { type: 'boolean' },
+                            error_details: {
+                                type: 'object',
+                                properties: {
+                                    error_message: { type: 'string' },
+                                    error_line: { type: 'integer' },
+                                    problematic_code: { type: 'string' },
+                                    full_plantuml: { type: 'string' },
+                                    full_context: { type: 'string' },
                                 },
                             },
-                            required: ['plantuml_code'],
+                            retry_instructions: { type: 'string' },
+                            error_message: { type: 'string' },
                         },
-                        outputSchema: {
-                            type: 'object',
-                            properties: {
-                                success: { type: 'boolean' },
-                                encoded: { type: 'string' },
-                                svg_url: { type: 'string', format: 'uri' },
-                                png_url: { type: 'string', format: 'uri' },
-                                error_message: { type: 'string' },
-                            },
-                            required: ['success'],
-                        },
+                        required: ['success'],
                     },
-                    {
-                        name: 'decode_plantuml',
-                        title: 'Decode PlantUML',
-                        description: 'Decode an encoded PlantUML string back to PlantUML source.',
-                        inputSchema: {
-                            type: 'object',
-                            properties: {
-                                encoded_string: {
-                                    type: 'string',
-                                    description: 'Encoded PlantUML string to decode.',
-                                },
+                },
+                {
+                    name: 'encode_plantuml',
+                    title: 'Encode PlantUML',
+                    description: 'Encode PlantUML code for usage in URLs or PlantUML servers.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            plantuml_code: {
+                                type: 'string',
+                                description: 'PlantUML diagram code to encode.',
                             },
-                            required: ['encoded_string'],
                         },
-                        outputSchema: {
-                            type: 'object',
-                            properties: {
-                                success: { type: 'boolean' },
-                                decoded: { type: 'string' },
-                                error_message: { type: 'string' },
-                            },
-                            required: ['success'],
-                        },
+                        required: ['plantuml_code'],
                     },
-                ],
-            };
+                    outputSchema: {
+                        type: 'object',
+                        properties: {
+                            success: { type: 'boolean' },
+                            encoded: { type: 'string' },
+                            svg_url: { type: 'string', format: 'uri' },
+                            png_url: { type: 'string', format: 'uri' },
+                            error_message: { type: 'string' },
+                        },
+                        required: ['success'],
+                    },
+                },
+                {
+                    name: 'decode_plantuml',
+                    title: 'Decode PlantUML',
+                    description: 'Decode an encoded PlantUML string back to PlantUML source.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            encoded_string: {
+                                type: 'string',
+                                description: 'Encoded PlantUML string to decode.',
+                            },
+                        },
+                        required: ['encoded_string'],
+                    },
+                    outputSchema: {
+                        type: 'object',
+                        properties: {
+                            success: { type: 'boolean' },
+                            decoded: { type: 'string' },
+                            error_message: { type: 'string' },
+                        },
+                        required: ['success'],
+                    },
+                },
+            ];
+            return normalizeSchemaTypes({ tools });
         });
         this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
             const { name } = request.params;
