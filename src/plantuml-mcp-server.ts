@@ -320,6 +320,14 @@ class PlantUMLMCPServer {
       version: SERVER_VERSION,
     });
 
+    this.server.registerCapabilities({
+      tools: {},
+      prompts: {},
+      resources: {},
+      completions: {},
+      logging: {},
+    });
+
     this.clientLogLevel = undefined;
 
     const serverWithCapabilities = this.server as unknown as {

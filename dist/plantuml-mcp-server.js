@@ -255,6 +255,13 @@ class PlantUMLMCPServer {
             title: 'PlantUML MCP Server',
             version: SERVER_VERSION,
         });
+        this.server.registerCapabilities({
+            tools: {},
+            prompts: {},
+            resources: {},
+            completions: {},
+            logging: {},
+        });
         this.clientLogLevel = undefined;
         const serverWithCapabilities = this.server;
         const originalGetCapabilities = serverWithCapabilities.getCapabilities.bind(this.server);
