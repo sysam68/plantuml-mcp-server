@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { URL } from 'node:url';
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
@@ -17,6 +19,7 @@ import {
   ListToolsRequestSchema,
   ReadResourceRequestSchema,
   SetLevelRequestSchema,
+  isInitializeRequest,
 } from '@modelcontextprotocol/sdk/types.js';
 import * as contentType from 'content-type';
 import plantumlEncoder from 'plantuml-encoder';
@@ -48,6 +51,23 @@ function parseLogLevel(value: string | undefined, fallback: LogLevel): LogLevel 
 
   if (LOG_LEVEL_ALIASES[normalized]) {
     return LOG_LEVEL_ALIASES[normalized];
+  }
+
+  return fallback;
+}
+
+function parseBoolean(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const normalized = value.toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
   }
 
   return fallback;
@@ -88,9 +108,11 @@ function logToConsole(level: LogLevel, message: string, error?: unknown) {
 
 const SERVER_VERSION = process.env.npm_package_version || '0.1.3';
 const PLANTUML_SERVER_URL = process.env.PLANTUML_SERVER_URL || 'https://www.plantuml.com/plantuml';
-const MCP_TRANSPORT = (process.env.MCP_TRANSPORT || 'stdio').toLowerCase();
+const MCP_TRANSPORT = (process.env.MCP_TRANSPORT || 'http').toLowerCase();
 const MCP_HOST = process.env.MCP_HOST || '0.0.0.0';
 const MCP_PORT = Number.parseInt(process.env.MCP_PORT || '3000', 10);
+const MCP_HTTP_PATH = normalizePath(process.env.MCP_HTTP_PATH || '/mcp');
+const MCP_HTTP_ENABLE_JSON_RESPONSES = parseBoolean(process.env.MCP_HTTP_ENABLE_JSON_RESPONSES, false);
 const MCP_SSE_PATH = normalizePath(process.env.MCP_SSE_PATH || '/sse');
 const MCP_SSE_MESSAGES_PATH = normalizePath(process.env.MCP_SSE_MESSAGES_PATH || '/messages');
 const MCP_API_KEY = process.env.MCP_API_KEY;
@@ -305,6 +327,52 @@ function extractAuthorizationHeader(request: unknown): string | undefined {
 
   const authorization = (headers as Record<string, unknown>).authorization;
   return typeof authorization === 'string' ? authorization : undefined;
+}
+
+function getHeaderValue(value: string | string[] | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  if (Array.isArray(value)) {
+    return value[value.length - 1];
+  }
+
+  return value;
+}
+
+function getAuthorizationHeader(req: IncomingMessage): string | undefined {
+  return getHeaderValue(req.headers.authorization);
+}
+
+function getSessionIdHeader(req: IncomingMessage): string | undefined {
+  return getHeaderValue(req.headers['mcp-session-id'] as string | string[] | undefined);
+}
+
+function ensureHttpCorsHeaders(res: ServerResponse) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'content-type, authorization, mcp-session-id');
+  res.setHeader('Access-Control-Expose-Headers', 'mcp-session-id');
+  res.setHeader('Vary', 'Origin');
+}
+
+function sendJsonError(res: ServerResponse, statusCode: number, message: string, code = -32000) {
+  if (res.headersSent) {
+    res.end();
+    return;
+  }
+
+  res
+    .writeHead(statusCode, { 'Content-Type': 'application/json' })
+    .end(JSON.stringify({ jsonrpc: '2.0', error: { code, message }, id: null }));
+}
+
+function isInitializationPayload(payload: unknown): boolean {
+  if (Array.isArray(payload)) {
+    return payload.some((entry) => isInitializeRequest(entry));
+  }
+
+  return isInitializeRequest(payload);
 }
 
 class PlantUMLMCPServer {
@@ -935,6 +1003,308 @@ class PlantUMLMCPServer {
   }
 }
 
+async function startStreamableHttpServer() {
+  type HttpSession = {
+    transport: StreamableHTTPServerTransport;
+    instance: PlantUMLMCPServer;
+    authorization?: string;
+  };
+
+  const sessions = new Map<string, HttpSession>();
+
+  const rejectUnauthorized = (res: ServerResponse, reason: string) => {
+    if (res.headersSent) {
+      res.end();
+      return;
+    }
+    res.writeHead(401, { 'Content-Type': 'text/plain' }).end(reason);
+  };
+
+  const httpServer = http.createServer(async (req, res) => {
+    try {
+      if (!req?.url) {
+        sendJsonError(res, 400, 'Invalid request');
+        return;
+      }
+
+      const scheme = req.headers['x-forwarded-proto'] ?? 'http';
+      const hostHeader = req.headers.host ?? `${MCP_HOST}:${MCP_PORT}`;
+      const base = `${scheme}://${hostHeader}`;
+      const requestUrl = new URL(req.url, base);
+
+      if (req.method === 'OPTIONS' && requestUrl.pathname === MCP_HTTP_PATH) {
+        res.writeHead(204, {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Headers': 'content-type, authorization, mcp-session-id',
+          'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+          'Access-Control-Expose-Headers': 'mcp-session-id',
+        });
+        res.end();
+        return;
+      }
+
+      if (requestUrl.pathname === MCP_HTTP_PATH) {
+        if (req.method === 'POST') {
+          ensureHttpCorsHeaders(res);
+
+          const providedAuthorization = getAuthorizationHeader(req);
+          const requestedSessionId = getSessionIdHeader(req);
+          let session = requestedSessionId ? sessions.get(requestedSessionId) : undefined;
+
+          if (requestedSessionId && !session) {
+            req.resume();
+            sendJsonError(res, 404, 'Session not found', -32001);
+            return;
+          }
+
+          let effectiveAuthorization = providedAuthorization ?? session?.authorization;
+
+          if (!session && !providedAuthorization && MCP_API_KEY) {
+            req.resume();
+            rejectUnauthorized(res, 'Unauthorized');
+            return;
+          }
+
+          if (!isValidAuthorizationHeader(effectiveAuthorization)) {
+            req.resume();
+            rejectUnauthorized(res, 'Unauthorized');
+            return;
+          }
+
+          let parsedBody: unknown | undefined;
+
+          if (!session) {
+            const parseResult = await (async (): Promise<{ success: true; body: unknown } | { success: false }> => {
+              let parsedContentType: contentType.ParsedMediaType;
+              try {
+                parsedContentType = contentType.parse(req.headers['content-type'] ?? 'application/json');
+              } catch (error) {
+                sendJsonError(res, 400, 'Invalid Content-Type header');
+                return { success: false };
+              }
+
+              if (parsedContentType.type !== 'application/json') {
+                sendJsonError(res, 415, 'Unsupported Media Type: Content-Type must be application/json');
+                return { success: false };
+              }
+
+              let rawBody: string;
+              try {
+                rawBody = await getRawBody(req, {
+                  limit: MAXIMUM_MESSAGE_SIZE,
+                  encoding: parsedContentType.parameters.charset ?? 'utf-8',
+                });
+              } catch (error) {
+                sendJsonError(res, 400, 'Invalid request body');
+                return { success: false };
+              }
+
+              try {
+                return { success: true, body: JSON.parse(rawBody) };
+              } catch (error) {
+                sendJsonError(res, 400, 'Invalid JSON payload', -32700);
+                return { success: false };
+              }
+            })();
+
+            if (!parseResult.success) {
+              return;
+            }
+
+            parsedBody = parseResult.body;
+
+            if (!isInitializationPayload(parsedBody)) {
+              sendJsonError(res, 400, 'Invalid Request: Initialization payload required for new session');
+              return;
+            }
+
+            const serverInstance = new PlantUMLMCPServer();
+
+            if (effectiveAuthorization) {
+              serverInstance.setDefaultAuthorization(effectiveAuthorization);
+            }
+
+            const sessionRecord: HttpSession = {
+              transport: new StreamableHTTPServerTransport({
+                sessionIdGenerator: () => randomUUID(),
+                enableJsonResponse: MCP_HTTP_ENABLE_JSON_RESPONSES,
+                onsessioninitialized: (sessionId) => {
+                  sessions.set(sessionId, sessionRecord);
+                  serverInstance.log('info', `HTTP session started: ${sessionId}`);
+                },
+                onsessionclosed: (sessionId) => {
+                  if (sessionId) {
+                    sessions.delete(sessionId);
+                  }
+                  serverInstance.log('info', `HTTP session closed: ${sessionId ?? 'unknown'}`);
+                },
+              }),
+              instance: serverInstance,
+              authorization: effectiveAuthorization,
+            };
+
+            sessionRecord.instance.onClose(() => {
+              const activeSessionId = sessionRecord.transport.sessionId;
+              if (activeSessionId) {
+                sessions.delete(activeSessionId);
+              }
+            });
+
+            sessionRecord.instance.onError((error) => {
+              serverInstance.log(
+                'error',
+                `Unhandled error in HTTP session ${sessionRecord.transport.sessionId ?? 'pending'}`,
+                error,
+              );
+            });
+
+            sessionRecord.transport.onerror = (error) => {
+              serverInstance.log(
+                'error',
+                `Unhandled error in streamable HTTP transport ${sessionRecord.transport.sessionId ?? 'pending'}`,
+                error,
+              );
+            };
+
+            sessionRecord.transport.onclose = () => {
+              const activeSessionId = sessionRecord.transport.sessionId;
+              if (activeSessionId) {
+                sessions.delete(activeSessionId);
+              }
+              void serverInstance.close().catch((error) => {
+                logToConsole('warning', 'Error closing PlantUML session during shutdown', error);
+              });
+            };
+
+            await serverInstance.connect(sessionRecord.transport);
+            session = sessionRecord;
+          }
+
+          effectiveAuthorization = providedAuthorization ?? session?.authorization;
+
+          if (session && effectiveAuthorization && !req.headers.authorization) {
+            req.headers.authorization = effectiveAuthorization;
+          }
+
+          if (session && providedAuthorization && providedAuthorization !== session.authorization) {
+            session.authorization = providedAuthorization;
+            session.instance.setDefaultAuthorization(providedAuthorization);
+          }
+
+          if (!session) {
+            sendJsonError(res, 500, 'Failed to initialize MCP session');
+            return;
+          }
+
+          await session.transport.handleRequest(req, res, parsedBody);
+          return;
+        }
+
+        if (req.method === 'GET' || req.method === 'DELETE') {
+          ensureHttpCorsHeaders(res);
+
+          const sessionId = getSessionIdHeader(req);
+          if (!sessionId) {
+            sendJsonError(res, 400, 'Bad Request: Mcp-Session-Id header is required');
+            return;
+          }
+
+          const session = sessions.get(sessionId);
+          if (!session) {
+            sendJsonError(res, 404, 'Session not found', -32001);
+            return;
+          }
+
+          const providedAuthorization = getAuthorizationHeader(req);
+          const effectiveAuthorization = providedAuthorization ?? session.authorization;
+
+          if (!isValidAuthorizationHeader(effectiveAuthorization)) {
+            rejectUnauthorized(res, 'Unauthorized');
+            return;
+          }
+
+          if (effectiveAuthorization && !req.headers.authorization) {
+            req.headers.authorization = effectiveAuthorization;
+          }
+
+          if (providedAuthorization && providedAuthorization !== session.authorization) {
+            session.authorization = providedAuthorization;
+            session.instance.setDefaultAuthorization(providedAuthorization);
+          }
+
+          await session.transport.handleRequest(req, res);
+          return;
+        }
+
+        req.resume();
+        sendJsonError(res, 405, 'Method not allowed.');
+        return;
+      }
+
+      if (req.method === 'GET' && requestUrl.pathname === '/healthz') {
+        res.writeHead(200, { 'Content-Type': 'text/plain' }).end('ok');
+        return;
+      }
+
+      res.writeHead(404).end('Not found');
+    } catch (error) {
+      logToConsole('error', 'HTTP server error', error);
+      if (!res.headersSent) {
+        res.writeHead(500).end('Internal server error');
+      } else {
+        res.end();
+      }
+    }
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    httpServer.on('error', (error) => {
+      logToConsole('error', 'HTTP server error', error);
+      reject(error);
+    });
+
+    httpServer.listen(MCP_PORT, MCP_HOST, () => {
+      logToConsole(
+        'info',
+        `PlantUML MCP server (HTTP transport) listening on http://${MCP_HOST}:${MCP_PORT}${MCP_HTTP_PATH}`,
+      );
+    });
+
+    const shutdown = async () => {
+      logToConsole('info', 'Shutdown signal received, closing HTTP server.');
+
+      try {
+        await Promise.all(
+          Array.from(sessions.values()).map(async ({ transport, instance }) => {
+            try {
+              await transport.close();
+            } catch (error) {
+              logToConsole('warning', 'Error closing HTTP transport during shutdown', error);
+            }
+
+            try {
+              await instance.close();
+            } catch (error) {
+              logToConsole('warning', 'Error closing HTTP session instance during shutdown', error);
+            }
+          }),
+        );
+      } finally {
+        httpServer.close((closeError) => {
+          if (closeError) {
+            reject(closeError);
+            return;
+          }
+          resolve();
+        });
+      }
+    };
+
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+  });
+}
+
 async function startSseServer() {
   const sessions = new Map<
     string,
@@ -1148,6 +1518,11 @@ async function handleSsePostMessage(
 }
 
 async function start() {
+  if (MCP_TRANSPORT === 'http') {
+    await startStreamableHttpServer();
+    return;
+  }
+
   if (MCP_TRANSPORT === 'stdio') {
     const server = new PlantUMLMCPServer();
     const transport = new StdioServerTransport();
