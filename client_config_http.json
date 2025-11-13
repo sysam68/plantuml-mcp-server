@@ -1,0 +1,10 @@
+{
+  "type": "http",
+  "url": "http://plantuml-mcp:8765/mcp",
+  "headers": {
+    "Authorization": "Bearer 1234"
+  },
+  "options": {
+    "enableJsonResponse": true
+  }
+}

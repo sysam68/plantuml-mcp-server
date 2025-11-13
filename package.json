@@ -20,7 +20,8 @@
   "files": [
     "dist/",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "documentation/mapping_archimate2plantuml.json"
   ],
   "scripts": {
     "build": "tsc",

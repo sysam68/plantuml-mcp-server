@@ -1,6 +1,8 @@
 {
-  "mcpServers": {
-    "plantuml": {
+  "examples": [
+    {
+      "name": "claude_cli_npx",
+      "type": "stdio",
       "command": "npx",
       "args": [
         "plantuml-mcp-server"
@@ -11,21 +13,18 @@
         "PLANTUML_SERVER_URL": "https://www.plantuml.com/plantuml",
         "MCP_API_KEY": "${MCP_API_KEY}"
       }
+    },
+    {
+      "name": "flowise_managed_stdio",
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "/path/to/plantuml-mcp-server/dist/plantuml-mcp-server.js"
+      ],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "PLANTUML_SERVER_URL": "http://plantuml-server:8080"
+      }
     }
-  }
-}
-
-{
-  "mcpServerConfig": {
-    "type": "stdio",
-    "command": "node",
-    "args": [
-      "/root/.flowise/mcp-servers/plantuml-mcp-server/dist/plantuml-mcp-server.js"
-    ],
-    "env": {
-      "MCP_TRANSPORT": "stdio",
-      "PLANTUML_SERVER_URL": "http://plantuml-server:8080"
-      // 
-    }
-  }
+  ]
 }
