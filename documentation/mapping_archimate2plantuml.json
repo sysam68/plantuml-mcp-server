@@ -1,360 +1,360 @@
 [
   {
-    "name": "CourseOfAction",
+    "class": "CourseOfAction",
     "plantUMLKeyword": "Strategy_CourseOfAction",
     "category": "Strategy elements",
     "description": "A course of actions is an approach or plan for configuring some capabilities and resources of the enterprise, undertaken to achieve a goal."
   },
   {
-    "name": "Resource",
+    "class": "Resource",
     "plantUMLKeyword": "Strategy_Resource",
     "category": "Strategy elements",
     "description": "Resource A resource represents an asset owned or controlled by an individual or organization."
   },
   {
-    "name": "Capability",
+    "class": "Capability",
     "plantUMLKeyword": "Strategy_Capability",
     "category": "Strategy elements",
     "description": "a capability represents an ability that an active structure element, such as an organization, person, or system, possesses."
   },
   {
-    "name": "ValueStream",
+    "class": "ValueStream",
     "plantUMLKeyword": "Strategy_ValueStream",
     "category": "Strategy elements",
     "description": "A Value Stream represents a sequence of activities that create an overall result for a customer, stakeholder, or end user."
   },
   {
-    "name": "Representation",
+    "class": "Representation",
     "plantUMLKeyword": "Motivation_Representation",
     "category": "Motivational elements",
     "description": "A Representation represents a perceptible form of the information carried by a business object."
   },
   {
-    "name": "BusinessActor",
+    "class": "BusinessActor",
     "plantUMLKeyword": "Business_Actor",
     "category": "Business elements",
     "description": "A Business Actor Represents a business entity that is capable of performing behavior."
   },
   {
-    "name": "BusinessObject",
+    "class": "BusinessObject",
     "plantUMLKeyword": "Business_Object",
     "category": "Business elements",
     "description": "A Business Object represents a concept used within a particular business domain."
   },
   {
-    "name": "BusinessFunction",
+    "class": "BusinessFunction",
     "plantUMLKeyword": "Business_Function",
     "category": "Business elements",
     "description": "A Business Function is a collection of business behavior based on a chosen set of criteria (typically required business resources and/or competencies), closely aligned to an organization, but not necessarily explicitly governed by the organization."
   },
   {
-    "name": "BusinessRole",
+    "class": "BusinessRole",
     "plantUMLKeyword": "Business_Role",
     "category": "Business elements",
     "description": "A Business Role is the responsibility for performing specific behavior, to which an actor can be assigned, or the part an actor plays in a particular action or event."
   },
   {
-    "name": "BusinessInterface",
+    "class": "BusinessInterface",
     "plantUMLKeyword": "Business_Interface",
     "category": "Business elements",
     "description": "A business interface represents a point of access where a business service is made available to the environment."
   },
   {
-    "name": "BusinessProcess",
+    "class": "BusinessProcess",
     "plantUMLKeyword": "Business_Process",
     "category": "Business elements",
     "description": "A Business Process represents a sequence of business behaviors that achieves a specific outcome such as a defined set of products or business services."
   },
   {
-    "name": "Contract",
+    "class": "Contract",
     "plantUMLKeyword": "Business_Contract",
     "category": "Business elements",
     "description": "A Contract represents a formal or informal specification of an agreement between a provider and a consumer that specifies the rights and obligations associated with a product and establishes functional and non‑functional parameters for interaction."
   },
   {
-    "name": "BusinessCollaboration",
+    "class": "BusinessCollaboration",
     "plantUMLKeyword": "Business_Collaboration",
     "category": "Business elements",
     "description": "An aggregate of two or more business internal active structure elements that work together to perform collective behavior."
   },
   {
-    "name": "BusinessInteraction",
+    "class": "BusinessInteraction",
     "plantUMLKeyword": "Business_Interaction",
     "category": "Business elements",
     "description": "A unit of collective business behavior performed by (a collaboration of) two or more business roles."
   },
   {
-    "name": "BusinessEvent",
+    "class": "BusinessEvent",
     "plantUMLKeyword": "Business_Event",
     "category": "Business elements",
     "description": "A Business Event is a business behavior element that denotes an organizational state change."
   },
   {
-    "name": "BusinessService",
+    "class": "BusinessService",
     "plantUMLKeyword": "Business_Service",
     "category": "Business elements",
     "description": "A Business Service represents an explicitly defined exposed business behavior."
   },
   {
-    "name": "Product",
+    "class": "Product",
     "plantUMLKeyword": "Business_Product",
     "category": "Business elements",
     "description": "A Product represents a coherent collection of services and/or passive structure elements, accompanied by a contract/set of agreements, which is offered as a whole to internal or external customers."
   },
   {
-    "name": "DataObject",
+    "class": "DataObject",
     "plantUMLKeyword": "Application_DataObject",
     "category": "Application elements",
     "description": "DataObject Represents data structured for automated processing."
   },
   {
-    "name": "ApplicationProcess",
+    "class": "ApplicationProcess",
     "plantUMLKeyword": "Application_Process",
     "category": "Application elements",
     "description": "An Application Process Represents a sequence of application behaviors that achieves a specific outcome."
   },
   {
-    "name": "ApplicationInterface",
+    "class": "ApplicationInterface",
     "plantUMLKeyword": "Application_Interface",
     "category": "Application elements",
     "description": "An Application Interface represents a point of access where application services are made available to a user, another application component, or a node."
   },
   {
-    "name": "ApplicationCollaboration",
+    "class": "ApplicationCollaboration",
     "plantUMLKeyword": "Application_Collaboration",
     "category": "Application elements",
     "description": "An Application Collaboration represents an aggregate of two or more application components that work together to perform collective application behavior."
   },
   {
-    "name": "ApplicationComponent",
+    "class": "ApplicationComponent",
     "plantUMLKeyword": "Application_Component",
     "category": "Application elements",
     "description": "An Application Component represents an encapsulation of application functionality aligned to implementation structure, which is modular and replaceable."
   },
   {
-    "name": "ApplicationFunction",
+    "class": "ApplicationFunction",
     "plantUMLKeyword": "Application_Function",
     "category": "Application elements",
     "description": "An Application Function represents automated behavior that can be performed by an application component."
   },
   {
-    "name": "ApplicationInteraction",
+    "class": "ApplicationInteraction",
     "plantUMLKeyword": "Application_Interaction",
     "category": "Application elements",
     "description": "An Application Interaction is an application internal behavior element that describes behavior that results from the collective behavior of two or more application components."
   },
   {
-    "name": "ApplicationService",
+    "class": "ApplicationService",
     "plantUMLKeyword": "Application_Service",
     "category": "Application elements",
     "description": "An Application Service Represents an explicitly defined exposed application behavior."
   },
   {
-    "name": "ApplicationEvent",
+    "class": "ApplicationEvent",
     "plantUMLKeyword": "Application_Event",
     "category": "Application elements",
     "description": "An Application Event is a behavior element that denotes a state change."
   },
   {
-    "name": "TechnologyInteraction",
+    "class": "TechnologyInteraction",
     "plantUMLKeyword": "Technology_Interaction",
     "category": "Technology elements",
     "description": "A Technology Interaction represents a unit of collective technology behavior performed by (a collaboration of) two or more nodes."
   },
   {
-    "name": "Artifact",
+    "class": "Artifact",
     "plantUMLKeyword": "Technology_Artifact",
     "category": "Technology elements",
     "description": "An Artifact represents a piece of data that is used or produced in a software development process."
   },
   {
-    "name": "TechnologyProcess",
+    "class": "TechnologyProcess",
     "plantUMLKeyword": "Technology_Process",
     "category": "Technology elements",
     "description": "A Technology Process represents a sequence of technology behaviors that achieves a specific outcome."
   },
   {
-    "name": "SystemSoftware",
+    "class": "SystemSoftware",
     "plantUMLKeyword": "Technology_SystemSoftware",
     "category": "Technology elements",
     "description": "A System Software represents software that provides or contributes to an environment for storing, executing, and using software or data deployed within it."
   },
   {
-    "name": "Facility",
+    "class": "Facility",
     "plantUMLKeyword": "Physical_Facility",
     "category": "Physical elements",
     "description": "A Facility represents a physical structure or environment."
   },
   {
-    "name": "DistributionNetwork",
+    "class": "DistributionNetwork",
     "plantUMLKeyword": "Physical_DistributionNetwork",
     "category": "Physical elements",
     "description": "A Distribution Network represents a physical network used to transport materials or energy."
   },
   {
-    "name": "CommunicationNetwork",
+    "class": "CommunicationNetwork",
     "plantUMLKeyword": "Technology_CommunicationNetwork",
     "category": "Technology elements",
     "description": "A Communication Network connects computer systems or other electronic devices for transmission, routing, and reception of data or data‑based communications."
   },
   {
-    "name": "Equipment",
+    "class": "Equipment",
     "plantUMLKeyword": "Physical_Equipment",
     "category": "Physical elements",
     "description": "An Equipment represents one or more physical machines, tools, or instruments that can create, use, store, move, or transform materials."
   },
   {
-    "name": "Material",
+    "class": "Material",
     "plantUMLKeyword": "Physical_Material",
     "category": "Physical elements",
     "description": "A Material represents tangible physical matter or physical elements."
   },
   {
-    "name": "TechnologyCollaboration",
+    "class": "TechnologyCollaboration",
     "plantUMLKeyword": "Technology_Collaboration",
     "category": "Technology elements",
     "description": "A Technology Collaboration represents an aggregate of two or more nodes that work together to perform collective technology behavior."
   },
   {
-    "name": "TechnologyFunction",
+    "class": "TechnologyFunction",
     "plantUMLKeyword": "Technology_Function",
     "category": "Technology elements",
     "description": "A Technology Function represents a collection of technology behavior that can be performed by a node."
   },
   {
-    "name": "Path",
+    "class": "Path",
     "plantUMLKeyword": "Technology_Path",
     "category": "Technology elements",
     "description": "A Path represents a link between two or more nodes, through which these nodes can exchange data or material."
   },
   {
-    "name": "TechnologyService",
+    "class": "TechnologyService",
     "plantUMLKeyword": "Technology_Service",
     "category": "Technology elements",
     "description": "A Technology Service represents an explicitly defined exposed technology behavior."
   },
   {
-    "name": "TechnologyEvent",
+    "class": "TechnologyEvent",
     "plantUMLKeyword": "Technology_Event",
     "category": "Technology elements",
     "description": "A Technology Event represents a technology behavior element that denotes a state change."
   },
   {
-    "name": "TechnologyInterface",
+    "class": "TechnologyInterface",
     "plantUMLKeyword": "Technology_Interface",
     "category": "Technology elements",
     "description": "A Technology Interface represents a point of access where technology services offered by a node can be accessed."
   },
   {
-    "name": "Node",
+    "class": "Node",
     "plantUMLKeyword": "Technology_Node",
     "category": "Technology elements",
     "description": "A Node represents a computational or physical resource that hosts, manipulates, or interacts with other computational or physical resources."
   },
   {
-    "name": "Device",
+    "class": "Device",
     "plantUMLKeyword": "Technology_Device",
     "category": "Technology elements",
     "description": "A Device Represents a physical computational resource with processing capability."
   },
   {
-    "name": "Goal",
+    "class": "Goal",
     "plantUMLKeyword": "Motivation_Goal",
     "category": "Motivational elements",
     "description": "A Goal represents a high‑level statement of intent, direction, or desired end state for an organization and its stakeholders."
   },
   {
-    "name": "Stakeholder",
+    "class": "Stakeholder",
     "plantUMLKeyword": "Motivation_Stakeholder",
     "category": "Motivational elements",
     "description": "A stakeholder represents the role of an individual, team, or organization that represents their interests in the effects of the architecture."
   },
   {
-    "name": "Meaning",
+    "class": "Meaning",
     "plantUMLKeyword": "Motivation_Meaning",
     "category": "Motivational elements",
     "description": "A Meaning represents the knowledge or expertise present in, or the interpretation given to, a core element in a particular context."
   },
   {
-    "name": "Assessment",
+    "class": "Assessment",
     "plantUMLKeyword": "Motivation_Assessment",
     "category": "Motivational elements",
     "description": "An Assessment represents the result of an analysis of the state of affairs of the enterprise with respect to some driver."
   },
   {
-    "name": "Constraint",
+    "class": "Constraint",
     "plantUMLKeyword": "Motivation_Constraint",
     "category": "Motivational elements",
     "description": "A Constraint represents a factor that prevents or obstructs the realization of goals."
   },
   {
-    "name": "Outcome",
+    "class": "Outcome",
     "plantUMLKeyword": "Motivation_Outcome",
     "category": "Motivational elements",
     "description": "An Outcome represents an end result that has been achieved."
   },
   {
-    "name": "Driver",
+    "class": "Driver",
     "plantUMLKeyword": "Motivation_Driver",
     "category": "Motivational elements",
     "description": "A Driver represents an external or internal condition that motivates an organization to define its goals and implement the changes necessary to achieve them."
   },
   {
-    "name": "Value",
+    "class": "Value",
     "plantUMLKeyword": "Motivation_Value",
     "category": "Motivational elements",
     "description": "A Value represents the relative worth, utility, or importance of a core element or an outcome."
   },
   {
-    "name": "Requirement",
+    "class": "Requirement",
     "plantUMLKeyword": "Motivation_Requirement",
     "category": "Motivational elements",
     "description": "A Requirement represents a statement of need that must be met by the architecture."
   },
   {
-    "name": "Principle",
+    "class": "Principle",
     "plantUMLKeyword": "Motivation_Principle",
     "category": "Motivational elements",
     "description": "A Principle represents a qualitative statement of intent that should be met by the architecture."
   },
   {
-    "name": "Gap",
+    "class": "Gap",
     "plantUMLKeyword": "Implementation_Gap",
     "category": "Implementation elements",
     "description": "A gap represents a statement of difference between two plateaus."
   },
   {
-    "name": "Deliverable",
+    "class": "Deliverable",
     "plantUMLKeyword": "Implementation_Deliverable",
     "category": "Implementation elements",
     "description": "A deliverable represents a precisely‑defined outcome of a work package."
   },
   {
-    "name": "Plateau",
+    "class": "Plateau",
     "plantUMLKeyword": "Implementation_Plateau",
     "category": "Implementation elements",
     "description": "A plateau represents a relatively stable state of the architecture that exists during a limited period of time."
   },
   {
-    "name": "WorkPackage",
+    "class": "WorkPackage",
     "plantUMLKeyword": "Implementation_WorkPackage",
     "category": "Implementation elements",
     "description": "A Work Package represents a series of actions identified and designed to achieve specific results within specified time and resource constraints."
   },
   {
-    "name": "Implementation Event",
+    "class": "Implementation Event",
     "plantUMLKeyword": "Implementation_Event",
     "category": "Implementation elements",
     "description": "An implementation event represents a precisely‑defined outcome of a work package."
   },
   {
-    "name": "Grouping",
+    "class": "Grouping",
     "plantUMLKeyword": "Grouping",
     "category": "Other",
     "description": "A grouping element aggregates or composes concepts that belong together based on some common characteristic."
   },
   {
-    "name": "Location",
+    "class": "Location",
     "plantUMLKeyword": "Other_Location",
     "category": "Other",
     "description": "A location is a place or position where structure elements can be located or behavior can be performed."

@@ -197,19 +197,18 @@ return result; // Success path
 - Offer manual follow-up steps if automatic fixes fail
 `;
 const DEFAULT_CAPABILITY_LANDSCAPE_SNIPPET = `@startuml
-!global $ARCH_SPECIAL_SHAPES = %true()
-!theme archimate-alternate from <archimate/themes>
+!theme archimate-standard from <archimate/themes>
 
 !include <archimate/Archimate>
 
 Group(GroupingAreaAUniqueCode, "Grouping Area A"){
-    Strategy_Capability(CapabilityDomain01UniqueCode, "A Capability Domain belonging the Grouping Area A", $special=%true()) {
-      Strategy_Capability(OperationalCapability01UniqueCode, "An operational Capability belonging to Capability Domain BAABD01", $special=%true())
+    Strategy_Capability(CapabilityDomain01UniqueCode, "A Capability Domain belonging the Grouping Area A") {
+      Strategy_Capability(OperationalCapability01UniqueCode, "An operational Capability belonging to Capability Domain BAABD01")
     }
 }
 Group(GroupingBreaBUniqueCode, "Business Area B"){
-    Strategy_Capability(CapabilityDomain02UniqueCode, "A Capability Domain belonging the Grouping Area B", $special=%true()) {
-      Strategy_Capability(OperationalCapability02UniqueCode, "An operational Capability belonging to Capability Domain BAABD01", $special=%true())
+    Strategy_Capability(CapabilityDomain02UniqueCode, "A Capability Domain belonging the Grouping Area B") {
+      Strategy_Capability(OperationalCapability02UniqueCode, "An operational Capability belonging to Capability Domain BAABD01")
     }
 }
 @enduml`;
@@ -562,8 +561,7 @@ function ensureIdentifier(candidate, fallbackLabel, fallbackPrefix) {
 function buildCapabilityLandscapeSnippet(groupings) {
     const lines = [
         '@startuml',
-        '!global $ARCH_SPECIAL_SHAPES = %true()',
-        '!theme archimate-alternate from <archimate/themes>',
+        '!theme archimate-standard from <archimate/themes>',
         '',
         '!include <archimate/Archimate>',
         '',
@@ -575,11 +573,11 @@ function buildCapabilityLandscapeSnippet(groupings) {
         (group.capability_domains ?? []).forEach((domain, domainIndex) => {
             const domainLabel = domain.label?.trim() || `Capability Domain ${domainIndex + 1}`;
             const domainId = ensureIdentifier(domain.code, domainLabel, `CapabilityDomain${groupIndex + 1}${domainIndex + 1}`);
-            lines.push(`    Strategy_Capability(${domainId}, "${domainLabel}", $special=%true()) {`);
+            lines.push(`    Strategy_Capability(${domainId}, "${domainLabel}") {`);
             (domain.capabilities ?? []).forEach((capability, capabilityIndex) => {
                 const capabilityLabel = capability.label?.trim() || `Operational Capability ${capabilityIndex + 1}`;
                 const capabilityId = ensureIdentifier(capability.code, capabilityLabel, `OperationalCapability${groupIndex + 1}${domainIndex + 1}${capabilityIndex + 1}`);
-                lines.push(`      Strategy_Capability(${capabilityId}, "${capabilityLabel}", $special=%true())`);
+                lines.push(`      Strategy_Capability(${capabilityId}, "${capabilityLabel}")`);
             });
             lines.push('    }');
         });
@@ -823,7 +821,6 @@ class PlantUMLMCPServer {
         const lines = ['@startuml'];
         lines.push(`!global $ARCH_LOCAL = ${options.useLocalStdlib ? '%true()' : '%false()'}`);
         lines.push('!global $ARCH_DEBUG = %false()');
-        lines.push('!global $ARCH_SPECIAL_SHAPES = %true()');
         lines.push('!if ($ARCH_LOCAL == %false())');
         lines.push('    !include <archimate/Archimate>');
         lines.push("    '!theme archimate-alternate from <archimate/themes>");
