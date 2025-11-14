@@ -474,6 +474,71 @@ ${DEFAULT_CAPABILITY_LANDSCAPE_SNIPPET}
 Guidelines:
 - Only \`label\` and \`code\` are used when building the PlantUML; extra metadata (type, description, relationships, etc.) is ignored.
 - The server normalizes common synonyms (\`group_name\`, \`domain_name\`, \`cap_name\`, etc.), but emitting the canonical keys above keeps the payload clear.`;
+ - The server normalizes common synonyms (\`group_name\`, \`domain_name\`, \`cap_name\`, etc.), but emitting the canonical keys above keeps the payload clear.`;
+    },
+  },
+  {
+    name: 'archimate_diagram_input_format',
+    title: 'ArchiMate Diagram Input Format',
+    description:
+      'JSON options accepted by generate_archimate_diagram (raw diagram_body or structured groups/elements/relationships).',
+    template: () => {
+      return `### Option 1 – Provide raw PlantUML body
+\`\`\`json
+{
+  "diagram_body": "@startuml\\n...Archimate code...\\n@enduml",
+  "format": "svg"
+}
+\`\`\`
+- If \`diagram_body\` already contains \`@startuml/@enduml\`, it is used as-is.
+- If it omits the tags, the server wraps it inside the ArchiMate template (includes, theme, optional legend).
+
+### Option 2 – Send structured JSON (the server builds the PlantUML)
+\`\`\`json
+{
+  "title": "Optional diagram title",
+  "layout": "left_to_right | top_down | sketch",
+  "theme": "archimate-standard",
+  "include_relationship_legend": false,
+  "use_local_stdlib": false,
+  "groups": [
+    {
+      "label": "Boundary label",     // synonyms: name, group_name
+      "macro": "Boundary",           // default if omitted
+      "elements": [
+        {
+          "macro": "Business_Actor",
+          "label": "Actor Name",
+          "code": "ActorAlias",
+          "note": "Optional note text"
+        }
+      ],
+      "groups": [ /* nested boundaries */ ]
+    }
+  ],
+  "elements": [
+    { "macro": "Application_Component", "label": "Standalone element", "code": "App1" }
+  ],
+  "relationships": [
+    {
+      "type": "Rel_Flow",      // use Rel_XXX macro; alternatively provide "raw_arrow": "..>"
+      "from": "App1",
+      "to": "ActorAlias",
+      "label": "Data transfer"
+    }
+  ],
+  "extra_body": "Optional PlantUML inserted before relationships",
+  "format": "svg"
+}
+\`\`\`
+
+Guidelines:
+- Only \`label\`/\`macro\`/\`code\` fields are consumed when building the diagram; extra metadata is ignored.
+- Synonyms recognized: \`name\`, \`group_name\`, \`domain_name\`, \`cap_name\`, etc.
+- \`relationships[].type\` should reference Rel_XXX helpers; set \`raw_arrow\` when you need custom arrow syntax.
+- Anything not listed above is preserved only in the optional \`extra_body\`.
+
+Use this prompt whenever you need the LLM to craft a valid payload for \`generate_archimate_diagram\`.`;
     },
   },
 ];
