@@ -6,9 +6,9 @@ All capabilities are exposed over **HTTP**, **Server-Sent Events (SSE)**, and **
 ---
 
 ## Key Features
-- 🧰 Tools: `generate_plantuml_diagram`, `generate_capability_landscape`, `encode_plantuml`, `decode_plantuml`
-- 🧾 Prompts: `plantuml_error_handling`, `capability_landscape_template`
-- 📚 Static resource: `resource://plantuml/server-guide`
+- 🧰 Tools: `generate_plantuml_diagram`, `generate_capability_landscape`, `generate_business_scenario`, `encode_plantuml`, `decode_plantuml`
+- 🧾 Prompts: `plantuml_error_handling`, `capability_landscape_input_format`, `archimate_diagram_input_format`, `business_scenario_input_format`
+- 📚 Static resources: `resource://plantuml/server-guide`, `resource://plantuml/archimate-mapping`
 - 🔒 Optional Bearer authentication via `MCP_API_KEY`
 - ☁️ Optional shared storage export (`GENERATED_FILES_DIR` + `PUBLIC_FILE_BASE_URL`)
 
@@ -95,6 +95,7 @@ Drop these files into your MCP-aware client or copy the snippets as needed. Upda
 | `MCP_API_KEY` | unset | Enables Bearer auth when provided |
 | `GENERATED_FILES_DIR` | `/generated-files` | Where rendered diagrams are persisted |
 | `PUBLIC_FILE_BASE_URL` | `https://ob-file.fmpn.fr/files` | Base URL returned to clients for persisted diagrams |
+| `PLANTUML_MCP_SKIP_AUTO_START` | unset | When `true`, skips auto-start so scripts can import the server class without launching transports |
 
 ---
 
@@ -119,6 +120,7 @@ Override environment variables (`PLANTUML_SERVER_URL`, `MCP_API_KEY`, etc.) as n
 - `npm run build` – compile TypeScript
 - `npm start` – run using the default HTTP transport
 - `npm run start:sse` / `npm run start:stdio` – convenience scripts
+- `npm run test:business-scenario` – snapshot test that converts `test_files/generate_sequence_diagram/payload.json` into PlantUML and compares it to `expected.puml`
 - `make test-mcp` – smoke-test commands through the `mcp` CLI
 
 ---
