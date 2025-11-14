@@ -430,7 +430,6 @@ ${DEFAULT_CAPABILITY_LANDSCAPE_SNIPPET}
 
 - Update \`Group(...)\` labels to reflect your business areas or groupings.
 - Add or remove \`Strategy_Capability\` blocks to represent capability domains and operational capabilities.
-- Keep \`$special=%true()\` on capability nodes when you want rounded special shapes.
 - You can include additional ArchiMate elements by referencing the \`<archimate/Archimate>\` library.`;
     },
   },
@@ -440,6 +439,42 @@ ${DEFAULT_CAPABILITY_LANDSCAPE_SNIPPET}
     description:
       'Full ArchiMate element catalog from the stdlib plus the official relationship legend to ensure compliant diagrams.',
     template: () => ARCHIMATE_REFERENCE_PROMPT_BODY,
+  },
+  {
+    name: 'capability_landscape_input_format',
+    title: 'Capability Landscape Input Format',
+    description: 'JSON schema to send to generate_capability_landscape (groupings → capability_domains → capabilities).',
+    template: () => {
+      return `Structure your request like this:
+
+\`\`\`json
+{
+  "format": "svg",                  // optional ("svg" default, or "png")
+  "groupings": [
+    {
+      "label": "Grouping name",     // required (also accepts "name" or "group_name")
+      "code": "OptionalGroupingId",
+      "capability_domains": [
+        {
+          "label": "Domain name",   // required (also accepts "domain_name" or "name")
+          "code": "OptionalDomainId",
+          "capabilities": [
+            {
+              "label": "Capability name",  // required (also accepts "cap_name" or "name")
+              "code": "OptionalCapabilityId"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+\`\`\`
+
+Guidelines:
+- Only \`label\` and \`code\` are used when building the PlantUML; extra metadata (type, description, relationships, etc.) is ignored.
+- The server normalizes common synonyms (\`group_name\`, \`domain_name\`, \`cap_name\`, etc.), but emitting the canonical keys above keeps the payload clear.`;
+    },
   },
 ];
 
@@ -1722,13 +1757,17 @@ class PlantUMLMCPServer {
         throw new Error(`groupings[${groupIndex}] must be an object.`);
       }
       const record = entry as Record<string, unknown>;
-      const label = this.requireString(record.label ?? record.name, `groupings[${groupIndex}].label`);
+      const label = this.requireString(
+        record.label ?? record.name ?? record.group_name ?? record.groupName,
+        `groupings[${groupIndex}].label`,
+      );
       const group: CapabilityGrouping = {
-        code: this.optionalString(record.code ?? record.id),
+        code: this.optionalString(record.code ?? record.id ?? record.group_code ?? record.groupCode),
         label,
       };
 
-      const domainsRaw = record.capability_domains ?? record.capabilities ?? record.capabilityDomains;
+      const domainsRaw =
+        record.capability_domains ?? record.capabilities ?? record.capabilityDomains ?? record.domains;
       if (Array.isArray(domainsRaw)) {
         group.capability_domains = domainsRaw.map((domainEntry, domainIndex) => {
           if (!domainEntry || typeof domainEntry !== 'object') {
@@ -1736,15 +1775,21 @@ class PlantUMLMCPServer {
           }
           const domainRecord = domainEntry as Record<string, unknown>;
           const domainLabel = this.requireString(
-            domainRecord.label ?? domainRecord.name,
+            domainRecord.label ?? domainRecord.name ?? domainRecord.domain_name ?? domainRecord.domainName,
             `groupings[${groupIndex}].capability_domains[${domainIndex}].label`,
           );
           const domain: CapabilityDomain = {
-            code: this.optionalString(domainRecord.code ?? domainRecord.id),
+            code: this.optionalString(
+              domainRecord.code ?? domainRecord.id ?? domainRecord.domain_code ?? domainRecord.domainCode,
+            ),
             label: domainLabel,
           };
 
-          const capabilitiesRaw = domainRecord.capabilities ?? domainRecord.operational_capabilities;
+          const capabilitiesRaw =
+            domainRecord.capabilities ??
+            domainRecord.operational_capabilities ??
+            domainRecord.capability_list ??
+            domainRecord.capabilityList;
           if (Array.isArray(capabilitiesRaw)) {
             domain.capabilities = capabilitiesRaw.map((capEntry, capabilityIndex) => {
               if (!capEntry || typeof capEntry !== 'object') {
@@ -1754,11 +1799,11 @@ class PlantUMLMCPServer {
               }
               const capRecord = capEntry as Record<string, unknown>;
               const capabilityLabel = this.requireString(
-                capRecord.label ?? capRecord.name,
+                capRecord.label ?? capRecord.name ?? capRecord.cap_name ?? capRecord.capName,
                 `groupings[${groupIndex}].capability_domains[${domainIndex}].capabilities[${capabilityIndex}].label`,
               );
               return {
-                code: this.optionalString(capRecord.code ?? capRecord.id),
+                code: this.optionalString(capRecord.code ?? capRecord.id ?? capRecord.cap_code ?? capRecord.capCode),
                 label: capabilityLabel,
               };
             });

@@ -1427,33 +1427,36 @@ class PlantUMLMCPServer {
                 throw new Error(`groupings[${groupIndex}] must be an object.`);
             }
             const record = entry;
-            const label = this.requireString(record.label ?? record.name, `groupings[${groupIndex}].label`);
+            const label = this.requireString(record.label ?? record.name ?? record.group_name ?? record.groupName, `groupings[${groupIndex}].label`);
             const group = {
-                code: this.optionalString(record.code ?? record.id),
+                code: this.optionalString(record.code ?? record.id ?? record.group_code ?? record.groupCode),
                 label,
             };
-            const domainsRaw = record.capability_domains ?? record.capabilities ?? record.capabilityDomains;
+            const domainsRaw = record.capability_domains ?? record.capabilities ?? record.capabilityDomains ?? record.domains;
             if (Array.isArray(domainsRaw)) {
                 group.capability_domains = domainsRaw.map((domainEntry, domainIndex) => {
                     if (!domainEntry || typeof domainEntry !== 'object') {
                         throw new Error(`groupings[${groupIndex}].capability_domains[${domainIndex}] must be an object.`);
                     }
                     const domainRecord = domainEntry;
-                    const domainLabel = this.requireString(domainRecord.label ?? domainRecord.name, `groupings[${groupIndex}].capability_domains[${domainIndex}].label`);
+                    const domainLabel = this.requireString(domainRecord.label ?? domainRecord.name ?? domainRecord.domain_name ?? domainRecord.domainName, `groupings[${groupIndex}].capability_domains[${domainIndex}].label`);
                     const domain = {
-                        code: this.optionalString(domainRecord.code ?? domainRecord.id),
+                        code: this.optionalString(domainRecord.code ?? domainRecord.id ?? domainRecord.domain_code ?? domainRecord.domainCode),
                         label: domainLabel,
                     };
-                    const capabilitiesRaw = domainRecord.capabilities ?? domainRecord.operational_capabilities;
+                    const capabilitiesRaw = domainRecord.capabilities ??
+                        domainRecord.operational_capabilities ??
+                        domainRecord.capability_list ??
+                        domainRecord.capabilityList;
                     if (Array.isArray(capabilitiesRaw)) {
                         domain.capabilities = capabilitiesRaw.map((capEntry, capabilityIndex) => {
                             if (!capEntry || typeof capEntry !== 'object') {
                                 throw new Error(`groupings[${groupIndex}].capability_domains[${domainIndex}].capabilities[${capabilityIndex}] must be an object.`);
                             }
                             const capRecord = capEntry;
-                            const capabilityLabel = this.requireString(capRecord.label ?? capRecord.name, `groupings[${groupIndex}].capability_domains[${domainIndex}].capabilities[${capabilityIndex}].label`);
+                            const capabilityLabel = this.requireString(capRecord.label ?? capRecord.name ?? capRecord.cap_name ?? capRecord.capName, `groupings[${groupIndex}].capability_domains[${domainIndex}].capabilities[${capabilityIndex}].label`);
                             return {
-                                code: this.optionalString(capRecord.code ?? capRecord.id),
+                                code: this.optionalString(capRecord.code ?? capRecord.id ?? capRecord.cap_code ?? capRecord.capCode),
                                 label: capabilityLabel,
                             };
                         });
