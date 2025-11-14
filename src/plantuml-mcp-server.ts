@@ -273,6 +273,72 @@ const ARCHIMATE_THEMES = [
 type ArchimateTheme = (typeof ARCHIMATE_THEMES)[number];
 const ARCHIMATE_THEME_SET = new Set<string>(ARCHIMATE_THEMES);
 
+const BUSINESS_SCENARIO_ELEMENT_TYPES = [
+  'driver',
+  'assessment',
+  'goal',
+  'outcome',
+  'principle',
+  'requirement',
+  'constraint',
+  'value',
+  'meaning',
+  'stakeholder',
+  'businessActor',
+  'businessCollaboration',
+  'businessEvent',
+  'businessInteraction',
+  'businessInterface',
+  'businessObject',
+  'businessProcess',
+  'businessRole',
+  'businessService',
+  'contract',
+  'product',
+  'representation',
+  'applicationCollaboration',
+  'applicationComponent',
+  'applicationEvent',
+  'applicationFunction',
+  'applicationInteraction',
+  'applicationInterface',
+  'applicationProcess',
+  'applicationService',
+  'dataObject',
+  'artifact',
+  'communicationNetwork',
+  'device',
+  'node',
+  'path',
+  'systemSoftware',
+  'technologyCollaboration',
+  'technologyEvent',
+  'technologyFunction',
+  'technologyInteraction',
+  'technologyInterface',
+  'technologyProcess',
+  'technologyService',
+  'distributionNetwork',
+  'equipment',
+  'facility',
+  'material',
+  'assume',
+  'document',
+  'question',
+  'schedule',
+  'change',
+  'reuse',
+  'error',
+] as const;
+type BusinessScenarioElementType = (typeof BUSINESS_SCENARIO_ELEMENT_TYPES)[number];
+const BUSINESS_SCENARIO_ELEMENT_TYPE_LOOKUP = new Map<string, BusinessScenarioElementType>();
+BUSINESS_SCENARIO_ELEMENT_TYPES.forEach((type) => {
+  BUSINESS_SCENARIO_ELEMENT_TYPE_LOOKUP.set(type.toLowerCase(), type);
+});
+const BUSINESS_SCENARIO_ELEMENT_TYPE_ALIASES: Record<string, BusinessScenarioElementType> = {
+  actor: 'businessActor',
+};
+
 type ArchimateMappingEntry = {
   name: string;
   plantUMLKeyword: string;
@@ -551,6 +617,52 @@ Guidelines:
 Use this prompt whenever you need the LLM to craft a valid payload for \`generate_archimate_diagram\`.`;
     },
   },
+  {
+    name: 'business_scenario_input_format',
+    title: 'Business Scenario Input Format',
+    description:
+      'Structured JSON to drive generate_business_scenario (elements block + ordered sequence instructions).',
+    template: () => {
+      return `Send JSON shaped like this:
+
+\`\`\`json
+{
+  "title": "Archi Print Usage",
+  "elements": [
+    { "type": "businessActor", "label": "Architect", "code": "architect" },
+    { "type": "applicationComponent", "label": "Archi", "code": "archi" },
+    { "type": "applicationFunction", "label": "Update Model", "code": "update" },
+    { "type": "applicationFunction", "label": "Print View", "code": "print" },
+    { "type": "systemSoftware", "label": "Windows Print Service", "code": "windowsPrint" },
+    { "type": "equipment", "label": "Printer", "code": "printer" }
+  ],
+  "sequences": [
+    { "kind": "call", "from": "Architect", "to": "Archi", "message": "Launch the Archi client" },
+    { "kind": "call", "from": "Archi", "to": "Update Model", "message": "Make changes", "to_activation": "activate" },
+    { "kind": "note", "target": "Update Model", "position": "right", "color": "#FFFFA5", "text": "<&document> Optional annotation" },
+    { "kind": "return", "message": "Updated model" },
+    { "kind": "call", "from": "Archi", "to": "Print View", "message": "Click print" },
+    { "kind": "call", "from": "Print View", "to": "Windows Print Service", "arrow": "-->", "message": "Send job" },
+    { "kind": "call", "from": "Windows Print Service", "to": "Printer", "message": "Deliver job" },
+    { "kind": "return", "message": "Complete" }
+  ],
+  "format": "svg"
+}
+\`\`\`
+
+Guidelines:
+- Allowed element \`type\` values: ${BUSINESS_SCENARIO_ELEMENT_TYPES.join(', ')} (plus \`actor\` as an alias of \`businessActor\`). Each element needs \`label\` and may include \`code\`/alias plus \`description\`.
+- Sequences are processed in order. Supported \`kind\` values:
+  - \`call\`: requires \`from\` and \`to\` (match any label/code/alias defined in \`elements\`). Optional \`arrow\` (defaults to \`->\`), \`message\`, \`from_activation\`, \`to_activation\` (\`activate\` or \`deactivate\`).
+  - \`return\`: optional \`message\`, renders a \`return ...\` line.
+  - \`note\`: requires \`target\`, \`text\`; optional \`position\` (\`left\`, \`right\`, \`over\`) and hex \`color\`. Multiline text is supported via \\\\n.
+  - \`raw\`: pass arbitrary PlantUML text via \`text\` when you need full control.
+- The server automatically injects \`@startuml\`, \`!global $ARCH_SEQUENCE_SUPPORT = %true()\`, \`!include <archimate/Archimate>\`, and closes the diagram.
+- References in \`sequences\` can use either the element \`label\`, \`code\`, or previously generated alias; the server normalizes them.
+
+Use this whenever you need a business scenario sequence diagram rendered via \`generate_business_scenario\`.`;
+    },
+  },
 ];
 
 type ResourceDefinition = {
@@ -776,6 +888,54 @@ type CapabilityGrouping = CapabilityNode & {
   capability_domains?: CapabilityDomain[];
 };
 
+type BusinessScenarioElement = {
+  type: BusinessScenarioElementType;
+  label: string;
+  code?: string;
+  alias: string;
+  description?: string;
+};
+
+type BusinessScenarioCallInstruction = {
+  kind: 'call';
+  from: string;
+  to: string;
+  message?: string;
+  arrow?: string;
+  from_activation?: 'activate' | 'deactivate';
+  to_activation?: 'activate' | 'deactivate';
+};
+
+type BusinessScenarioReturnInstruction = {
+  kind: 'return';
+  message?: string;
+};
+
+type BusinessScenarioNoteInstruction = {
+  kind: 'note';
+  target: string;
+  position?: 'left' | 'right' | 'over';
+  color?: string;
+  text: string;
+};
+
+type BusinessScenarioRawInstruction = {
+  kind: 'raw';
+  text: string;
+};
+
+type BusinessScenarioInstruction =
+  | BusinessScenarioCallInstruction
+  | BusinessScenarioReturnInstruction
+  | BusinessScenarioNoteInstruction
+  | BusinessScenarioRawInstruction;
+
+type BusinessScenarioDefinition = {
+  title?: string;
+  elements: BusinessScenarioElement[];
+  sequences: BusinessScenarioInstruction[];
+};
+
 function sanitizeIdentifier(value: string, fallbackPrefix: string): string {
   const normalized = value
     .normalize('NFKD')
@@ -834,6 +994,53 @@ function buildCapabilityLandscapeSnippet(groupings: CapabilityGrouping[]): strin
 
   lines.push('@enduml');
   return lines.join('\n');
+}
+
+function normalizeBusinessScenarioElementType(value: unknown, path: string): BusinessScenarioElementType {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(
+      `Expected a valid business scenario element type for ${path}. Allowed values: ${BUSINESS_SCENARIO_ELEMENT_TYPES.join(', ')}`,
+    );
+  }
+  const normalized = value.trim().toLowerCase();
+  const match = BUSINESS_SCENARIO_ELEMENT_TYPE_LOOKUP.get(normalized);
+  if (match) {
+    return match;
+  }
+  const aliasMatch = BUSINESS_SCENARIO_ELEMENT_TYPE_ALIASES[normalized];
+  if (!aliasMatch) {
+    throw new Error(
+      `Invalid element type "${value}" for ${path}. Allowed values: ${BUSINESS_SCENARIO_ELEMENT_TYPES.join(', ')}`,
+    );
+  }
+  return aliasMatch;
+}
+
+function normalizeActivationState(value: unknown, path: string): 'activate' | 'deactivate' | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`${path} must be "activate", "deactivate", "++", or "--" when provided.`);
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'activate' || normalized === '++' || normalized === 'start') {
+    return 'activate';
+  }
+  if (normalized === 'deactivate' || normalized === '--' || normalized === 'end') {
+    return 'deactivate';
+  }
+  throw new Error(`${path} must be "activate", "deactivate", "++", or "--" when provided.`);
+}
+
+function formatActivationSuffix(state: 'activate' | 'deactivate' | undefined): string {
+  if (state === 'activate') {
+    return ' ++';
+  }
+  if (state === 'deactivate') {
+    return ' --';
+  }
+  return '';
 }
 
 class PlantUMLMCPServer {
@@ -927,6 +1134,10 @@ class PlantUMLMCPServer {
       return normalized as ArchimateTheme;
     }
     throw new Error(`theme must be one of: ${ARCHIMATE_THEMES.join(', ')}`);
+  }
+
+  private escapePlantUMLString(value: string): string {
+    return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
   }
 
   private indentLine(text: string, indent: number): string {
@@ -1666,6 +1877,90 @@ class PlantUMLMCPServer {
               required: ['success'],
             },
           },
+          {
+            name: 'generate_business_scenario',
+            title: 'Generate Business Scenario',
+            description:
+              'Build an ArchiMate sequence-style diagram from structured JSON describing elements and ordered interactions.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                title: {
+                  type: 'string',
+                  description: 'Optional business scenario title rendered via the PlantUML title directive.',
+                },
+                elements: {
+                  type: 'array',
+                  description:
+                    'Element catalog used in the scenario. Each entry defines the ArchiMate macro, label, and optional alias/description.',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      type: {
+                        type: 'string',
+                        description: 'Element macro identifier (businessActor, applicationComponent, etc.).',
+                      },
+                      label: { type: 'string' },
+                      code: { type: 'string', description: 'Optional explicit alias/id.' },
+                      description: { type: 'string' },
+                    },
+                    required: ['type', 'label'],
+                  },
+                },
+                sequences: {
+                  type: 'array',
+                  description:
+                    'Ordered sequence instructions. Supported kinds: call, return, note, raw. Calls reference the element labels/aliases from the elements array.',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      kind: { type: 'string', enum: ['call', 'return', 'note', 'raw'] },
+                      from: { type: 'string' },
+                      to: { type: 'string' },
+                      message: { type: 'string' },
+                      arrow: { type: 'string' },
+                      from_activation: { type: 'string', enum: ['activate', 'deactivate', '++', '--'] },
+                      to_activation: { type: 'string', enum: ['activate', 'deactivate', '++', '--'] },
+                      target: { type: 'string' },
+                      position: { type: 'string', enum: ['left', 'right', 'over'] },
+                      color: { type: 'string' },
+                      text: { type: 'string' },
+                    },
+                    required: ['kind'],
+                  },
+                },
+                format: {
+                  type: 'string',
+                  enum: ['svg', 'png'],
+                  default: 'svg',
+                  description: 'Output image format.',
+                },
+              },
+              required: ['elements', 'sequences'],
+            },
+            outputSchema: {
+              type: 'object',
+              properties: {
+                success: { type: 'boolean' },
+                format: { type: 'string', enum: ['svg', 'png'] },
+                diagram_url: { type: 'string', format: 'uri' },
+                markdown_embed: { type: 'string' },
+                encoded_diagram: { type: 'string' },
+                remote_plantuml_url: { type: 'string', format: 'uri' },
+                shared_storage: {
+                  type: 'object',
+                  properties: {
+                    filename: { type: 'string' },
+                    file_path: { type: 'string' },
+                    public_url: { type: 'string', format: 'uri' },
+                  },
+                },
+                business_scenario_source: { type: 'string' },
+                error_message: { type: 'string' },
+              },
+              required: ['success'],
+            },
+          },
         ],
       };
     });
@@ -1689,6 +1984,8 @@ class PlantUMLMCPServer {
           return this.generateCapabilityLandscape(args);
         case 'generate_archimate_diagram':
           return this.generateArchimateDiagram(args);
+        case 'generate_business_scenario':
+          return this.generateBusinessScenario(args);
         case 'encode_plantuml':
           return this.encodePlantuml(args);
         case 'decode_plantuml':
@@ -2166,6 +2463,46 @@ class PlantUMLMCPServer {
     return result;
   }
 
+  private async generateBusinessScenario(args: Record<string, unknown>) {
+    const format = args.format === 'png' ? 'png' : 'svg';
+    const title = this.optionalString(args.title ?? args.scenario_title ?? args.name);
+
+    const elementInput = args.elements ?? args.element_definitions ?? args.elementDefinitions ?? args.actors;
+    const sequenceInput = args.sequences ?? args.sequence ?? args.steps ?? args.instructions;
+
+    const { elements, aliasMap } = this.normalizeBusinessScenarioElements(elementInput);
+    const sequences = this.normalizeBusinessScenarioInstructions(sequenceInput, aliasMap);
+
+    const definition: BusinessScenarioDefinition = {
+      title,
+      elements,
+      sequences,
+    };
+
+    const plantumlCode = this.buildBusinessScenarioDocument(definition);
+    const result = await this.generateDiagram({
+      plantuml_code: plantumlCode,
+      format,
+    });
+
+    if (result.structuredContent && typeof result.structuredContent === 'object') {
+      (result.structuredContent as Record<string, unknown>).business_scenario_source = plantumlCode;
+    }
+
+    const sourceBlock = {
+      type: 'text' as const,
+      text: `**Business Scenario PlantUML Source:**\n\`\`\`plantuml\n${plantumlCode}\n\`\`\``,
+    };
+
+    if (Array.isArray(result.content)) {
+      result.content.push(sourceBlock);
+    } else {
+      result.content = [sourceBlock];
+    }
+
+    return result;
+  }
+
   private async generateCapabilityLandscape(args: Record<string, unknown>) {
     const format = args.format === 'png' ? 'png' : 'svg';
     let plantumlCode = DEFAULT_CAPABILITY_LANDSCAPE_SNIPPET;
@@ -2181,6 +2518,305 @@ class PlantUMLMCPServer {
       plantuml_code: plantumlCode,
       format,
     });
+  }
+
+  private normalizeBusinessScenarioElements(raw: unknown): {
+    elements: BusinessScenarioElement[];
+    aliasMap: Map<string, string>;
+  } {
+    if (!Array.isArray(raw) || raw.length === 0) {
+      throw new Error('elements must be a non-empty array of business scenario definitions.');
+    }
+
+    const aliasMap = new Map<string, string>();
+    const usedAliases = new Set<string>();
+
+    const elements = raw.map((entry, index) => {
+      if (!entry || typeof entry !== 'object') {
+        throw new Error(`elements[${index}] must be an object.`);
+      }
+      const record = entry as Record<string, unknown>;
+      const type = normalizeBusinessScenarioElementType(
+        record.type ?? record.element_type ?? record.macro ?? record.kind,
+        `elements[${index}].type`,
+      );
+      const label = this.requireString(
+        record.label ?? record.name ?? record.title,
+        `elements[${index}].label`,
+      );
+      const code = this.optionalString(record.code ?? record.alias ?? record.id ?? record.identifier);
+      const description = this.optionalString(record.description ?? record.detail ?? record.note);
+      const aliasBase = ensureIdentifier(code, label, `BusinessScenarioElement${index + 1}`);
+      const alias = this.reserveBusinessScenarioAlias(aliasBase, usedAliases);
+
+      this.registerBusinessScenarioAlias(
+        aliasMap,
+        alias,
+        alias,
+        label,
+        code,
+        this.optionalString(record.alias),
+        this.optionalString(record.identifier),
+        this.optionalString(record.name),
+      );
+
+      const element: BusinessScenarioElement = {
+        type,
+        label,
+        code: code ?? undefined,
+        alias,
+        description: description ?? undefined,
+      };
+      return element;
+    });
+
+    return { elements, aliasMap };
+  }
+
+  private normalizeBusinessScenarioInstructions(
+    raw: unknown,
+    aliasMap: Map<string, string>,
+  ): BusinessScenarioInstruction[] {
+    if (!Array.isArray(raw) || raw.length === 0) {
+      throw new Error('sequences must be a non-empty array of instructions.');
+    }
+
+    return raw.map((entry, index) => {
+      if (typeof entry === 'string') {
+        const trimmed = entry.trim();
+        if (!trimmed) {
+          throw new Error(`sequences[${index}] must not be an empty string.`);
+        }
+        return { kind: 'raw', text: trimmed };
+      }
+
+      if (!entry || typeof entry !== 'object') {
+        throw new Error(`sequences[${index}] must be an object or string instruction.`);
+      }
+
+      const record = entry as Record<string, unknown>;
+      const kindCandidate = this.optionalString(record.kind ?? record.type ?? record.action);
+      let normalizedKind = kindCandidate?.toLowerCase();
+      if (!normalizedKind) {
+        if (record.from && record.to) {
+          normalizedKind = 'call';
+        } else {
+          throw new Error(`sequences[${index}].kind is required (call, return, note, raw).`);
+        }
+      }
+      if (normalizedKind === 'message') {
+        normalizedKind = 'call';
+      }
+
+      switch (normalizedKind) {
+        case 'call': {
+          const fromRef = this.requireString(
+            record.from ?? record.source,
+            `sequences[${index}].from`,
+          );
+          const toRef = this.requireString(
+            record.to ?? record.target ?? record.destination,
+            `sequences[${index}].to`,
+          );
+          const message = this.optionalString(record.message ?? record.label ?? record.text);
+          const arrow = this.optionalString(record.arrow ?? record.connector ?? record.line_style) ?? '->';
+          const fromActivation = normalizeActivationState(
+            record.from_activation ?? record.fromActivation ?? record.activate_from,
+            `sequences[${index}].from_activation`,
+          );
+          const toActivation = normalizeActivationState(
+            record.to_activation ?? record.toActivation ?? record.activate_to,
+            `sequences[${index}].to_activation`,
+          );
+          const instruction: BusinessScenarioCallInstruction = {
+            kind: 'call',
+            from: this.resolveBusinessScenarioReference(aliasMap, fromRef, `sequences[${index}].from`),
+            to: this.resolveBusinessScenarioReference(aliasMap, toRef, `sequences[${index}].to`),
+            message: message ?? undefined,
+            arrow,
+            from_activation: fromActivation,
+            to_activation: toActivation,
+          };
+          return instruction;
+        }
+        case 'return': {
+          const message = this.optionalString(record.message ?? record.label ?? record.text);
+          return {
+            kind: 'return',
+            message: message ?? undefined,
+          };
+        }
+        case 'note': {
+          const targetRef = this.requireString(
+            record.target ?? record.element ?? record.actor,
+            `sequences[${index}].target`,
+          );
+          const text = this.requireString(
+            record.text ?? record.message ?? record.note ?? record.body,
+            `sequences[${index}].text`,
+          );
+          const position = this.normalizeNotePosition(
+            this.optionalString(record.position ?? record.side ?? record.placement),
+            `sequences[${index}].position`,
+          );
+          const color = this.optionalString(record.color ?? record.fill ?? record.note_color);
+          return {
+            kind: 'note',
+            target: this.resolveBusinessScenarioReference(aliasMap, targetRef, `sequences[${index}].target`),
+            position,
+            color: color ?? undefined,
+            text,
+          };
+        }
+        case 'raw': {
+          const text = this.requireString(
+            record.text ?? record.body ?? record.raw ?? record.line,
+            `sequences[${index}].text`,
+          );
+          return {
+            kind: 'raw',
+            text,
+          };
+        }
+        default:
+          throw new Error(
+            `Unsupported sequences[${index}].kind "${normalizedKind}". Use call, return, note, or raw.`,
+          );
+      }
+    });
+  }
+
+  private normalizeNotePosition(
+    value: string | undefined,
+    path: string,
+  ): 'left' | 'right' | 'over' | undefined {
+    if (!value) {
+      return undefined;
+    }
+    const normalized = value.toLowerCase();
+    if (normalized === 'left' || normalized === 'right' || normalized === 'over') {
+      return normalized;
+    }
+    throw new Error(`${path} must be left, right, or over when provided.`);
+  }
+
+  private registerBusinessScenarioAlias(map: Map<string, string>, alias: string, ...keys: (string | undefined)[]) {
+    const register = (key: string | undefined) => {
+      if (typeof key !== 'string') {
+        return;
+      }
+      const trimmed = key.trim();
+      if (!trimmed) {
+        return;
+      }
+      map.set(trimmed.toLowerCase(), alias);
+    };
+
+    register(alias);
+    keys.forEach((key) => register(key));
+  }
+
+  private resolveBusinessScenarioReference(map: Map<string, string>, value: unknown, path: string): string {
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      throw new Error(`Expected a non-empty element reference for ${path}`);
+    }
+    const normalized = value.trim().toLowerCase();
+    const alias = map.get(normalized);
+    if (!alias) {
+      throw new Error(
+        `Unknown element reference "${value}" for ${path}. Ensure the label/code appears in the elements array.`,
+      );
+    }
+    return alias;
+  }
+
+  private reserveBusinessScenarioAlias(base: string, used: Set<string>): string {
+    let candidate = base;
+    let counter = 2;
+    while (used.has(candidate.toLowerCase())) {
+      candidate = sanitizeIdentifier(`${base}${counter}`, 'BusinessScenarioElement');
+      counter += 1;
+    }
+    used.add(candidate.toLowerCase());
+    return candidate;
+  }
+
+  private formatSequenceMessage(value: string): string {
+    return value.replace(/\r?\n/g, '\\n');
+  }
+
+  private buildBusinessScenarioDocument(definition: BusinessScenarioDefinition): string {
+    const lines: string[] = [
+      '@startuml',
+      '!global $ARCH_SEQUENCE_SUPPORT = %true()',
+      '!include <archimate/Archimate>',
+      '',
+    ];
+
+    if (definition.title) {
+      lines.push(`title ${definition.title.replace(/\r?\n/g, '\\n')}`);
+      lines.push('');
+    }
+
+    if (definition.elements.length > 0) {
+      lines.push("' Define Elements");
+      definition.elements.forEach((element) => {
+        const macro = `$${element.type}`;
+        const args = [
+          `"${this.escapePlantUMLString(element.label)}"`,
+          `"${element.alias}"`,
+        ];
+        if (element.description) {
+          args.push(`"${this.escapePlantUMLString(element.description)}"`);
+        }
+        lines.push(`${macro}(${args.join(', ')})`);
+      });
+      lines.push('');
+    }
+
+    if (definition.sequences.length > 0) {
+      lines.push("' Define Sequence");
+      definition.sequences.forEach((instruction) => {
+        switch (instruction.kind) {
+          case 'call': {
+            const fromSuffix = formatActivationSuffix(instruction.from_activation);
+            const toSuffix = formatActivationSuffix(instruction.to_activation);
+            const messageSuffix = instruction.message ? ` : ${this.formatSequenceMessage(instruction.message)}` : '';
+            lines.push(
+              `${instruction.from}${fromSuffix} ${instruction.arrow ?? '->'} ${instruction.to}${toSuffix}${messageSuffix}`,
+            );
+            break;
+          }
+          case 'return': {
+            const message = instruction.message ? ` ${this.formatSequenceMessage(instruction.message)}` : '';
+            lines.push(`return${message}`);
+            break;
+          }
+          case 'note': {
+            const headerParts = ['note', instruction.position ?? 'right', instruction.target];
+            if (instruction.color) {
+              headerParts.push(instruction.color);
+            }
+            lines.push(headerParts.join(' '));
+            instruction.text.split(/\r?\n/).forEach((line) => {
+              lines.push(line);
+            });
+            lines.push('end note');
+            break;
+          }
+          case 'raw': {
+            lines.push(instruction.text);
+            break;
+          }
+          default:
+            break;
+        }
+      });
+      lines.push('');
+    }
+
+    lines.push('@enduml');
+    return lines.join('\n');
   }
 
   private async encodePlantuml(args: Record<string, unknown>) {
