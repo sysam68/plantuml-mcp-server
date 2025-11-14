@@ -99,6 +99,14 @@ const GENERATED_FILES_DIR = path.resolve(process.env.GENERATED_FILES_DIR || '/ge
 const PUBLIC_FILE_BASE_URL = normalizeBaseUrl(process.env.PUBLIC_FILE_BASE_URL || 'https://ob-file.fmpn.fr/files');
 const MAXIMUM_MESSAGE_SIZE = '4mb';
 const COMPLETION_MAX_RESULTS = 100;
+function stringifyForLog(value) {
+    try {
+        return JSON.stringify(value, null, 2);
+    }
+    catch {
+        return '[unserializable]';
+    }
+}
 logToConsole('info', `Log level set to ${requestedLogLevel}`);
 if (MCP_API_KEY) {
     logToConsole('info', 'MCP API key authentication enabled.');
@@ -1645,28 +1653,37 @@ export class PlantUMLMCPServer {
             const { name } = request.params;
             const args = (request.params.arguments ?? {});
             this.log('debug', `CallTool request received: ${name}`);
-            this.log('debug', `Request arguments: ${JSON.stringify(args)}`);
+            this.log('debug', `CallTool raw request payload:\n${stringifyForLog(request)}`);
             const authorization = extractAuthorizationHeader(request) ?? this.defaultAuthorization;
             if (!isValidAuthorizationHeader(authorization)) {
                 this.log('warning', `Unauthorized CallTool request blocked for tool ${name ?? '<unknown>'}.`);
                 return unauthorizedResponse();
             }
+            let response;
             switch (name) {
                 case 'generate_plantuml_diagram':
-                    return this.generateDiagram(args);
+                    response = await this.generateDiagram(args);
+                    break;
                 case 'generate_capability_landscape':
-                    return this.generateCapabilityLandscape(args);
+                    response = await this.generateCapabilityLandscape(args);
+                    break;
                 case 'generate_archimate_diagram':
-                    return this.generateArchimateDiagram(args);
+                    response = await this.generateArchimateDiagram(args);
+                    break;
                 case 'generate_business_scenario':
-                    return this.generateBusinessScenario(args);
+                    response = await this.generateBusinessScenario(args);
+                    break;
                 case 'encode_plantuml':
-                    return this.encodePlantuml(args);
+                    response = await this.encodePlantuml(args);
+                    break;
                 case 'decode_plantuml':
-                    return this.decodePlantuml(args);
+                    response = await this.decodePlantuml(args);
+                    break;
                 default:
                     throw new Error(`Unknown tool: ${name}`);
             }
+            this.log('debug', `CallTool response for ${name}:\n${stringifyForLog(response?.structuredContent ?? response)}`);
+            return response;
         });
     }
     setupPromptHandlers() {
@@ -1833,9 +1850,11 @@ export class PlantUMLMCPServer {
     async validatePlantUMLSyntax(encoded, originalCode) {
         try {
             const validationUrl = `${PLANTUML_SERVER_URL}/txt/${encoded}`;
+            logToConsole('debug', `Validating PlantUML syntax via ${validationUrl}`);
             const response = await fetch(validationUrl);
             const errorMessage = response.headers.get('x-plantuml-diagram-error');
             if (!errorMessage) {
+                logToConsole('debug', 'PlantUML validation endpoint reported no errors.');
                 return { isValid: true };
             }
             const errorLineHeader = response.headers.get('x-plantuml-diagram-error-line');
@@ -1867,8 +1886,11 @@ export class PlantUMLMCPServer {
             throw new Error('plantuml_code is required');
         }
         try {
+            this.log('debug', `generateDiagram invoked (format=${format}, chars=${plantumlCode.length})`);
             const encoded = encodePlantUML(plantumlCode);
+            this.log('debug', `PlantUML payload encoded (length=${encoded.length})`);
             const validation = await this.validatePlantUMLSyntax(encoded, plantumlCode);
+            this.log('debug', `PlantUML validation result: ${validation.isValid ? 'valid' : 'invalid'}`);
             if (!validation.isValid && validation.error) {
                 const structuredContent = {
                     success: false,
@@ -1894,12 +1916,20 @@ export class PlantUMLMCPServer {
                 };
             }
             const remoteDiagramUrl = `${PLANTUML_SERVER_URL}/${format}/${encoded}`;
+            this.log('debug', `Requesting PlantUML rendering from ${remoteDiagramUrl}`);
             const response = await fetch(remoteDiagramUrl);
+            this.log('debug', `PlantUML render response status: ${response.status}`);
             if (!response.ok) {
                 throw new Error(`PlantUML server returned ${response.status}: ${response.statusText}`);
             }
             const diagramBuffer = Buffer.from(await response.arrayBuffer());
             const storedDiagram = await persistDiagramToSharedStorage(diagramBuffer, format);
+            if (storedDiagram) {
+                this.log('debug', `Diagram persisted to shared storage at ${storedDiagram.filePath}`);
+            }
+            else {
+                this.log('debug', 'Shared storage disabled; using remote PlantUML URL only.');
+            }
             const publicDiagramUrl = storedDiagram?.publicUrl ?? remoteDiagramUrl;
             const markdownEmbed = `![PlantUML Diagram](${publicDiagramUrl})`;
             const structuredContent = {
@@ -2490,6 +2520,7 @@ async function startStreamableHttpServer() {
                             return;
                         }
                         parsedBody = parseResult.body;
+                        logToConsole('debug', `HTTP MCP initialization payload:\n${stringifyForLog(parsedBody)}`);
                         if (!isInitializationPayload(parsedBody)) {
                             sendJsonError(res, 400, 'Invalid Request: Initialization payload required for new session');
                             return;
