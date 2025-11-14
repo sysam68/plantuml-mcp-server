@@ -212,6 +212,14 @@ Group(GroupingBreaBUniqueCode, "Business Area B"){
     }
 }
 @enduml`;
+const ARCHIMATE_THEMES = [
+    'archimate-standard',
+    'archimate-alternate',
+    'archimate-saturated',
+    'archimate-lowsaturation',
+    'archimate-handwriting',
+];
+const ARCHIMATE_THEME_SET = new Set(ARCHIMATE_THEMES);
 const ARCHIMATE_MAPPING_PATHS = [
     path.resolve(MODULE_DIR, '../documentation/mapping_archimate2plantuml.json'),
     path.resolve(MODULE_DIR, '../../documentation/mapping_archimate2plantuml.json'),
@@ -361,7 +369,6 @@ ${DEFAULT_CAPABILITY_LANDSCAPE_SNIPPET}
 
 - Update \`Group(...)\` labels to reflect your business areas or groupings.
 - Add or remove \`Strategy_Capability\` blocks to represent capability domains and operational capabilities.
-- Keep \`$special=%true()\` on capability nodes when you want rounded special shapes.
 - You can include additional ArchiMate elements by referencing the \`<archimate/Archimate>\` library.`;
         },
     },
@@ -370,6 +377,106 @@ ${DEFAULT_CAPABILITY_LANDSCAPE_SNIPPET}
         title: 'ArchiMate Elements & Relationship Guide',
         description: 'Full ArchiMate element catalog from the stdlib plus the official relationship legend to ensure compliant diagrams.',
         template: () => ARCHIMATE_REFERENCE_PROMPT_BODY,
+    },
+    {
+        name: 'capability_landscape_input_format',
+        title: 'Capability Landscape Input Format',
+        description: 'JSON schema to send to generate_capability_landscape (groupings → capability_domains → capabilities).',
+        template: () => {
+            return `Structure your request like this:
+
+\`\`\`json
+{
+  "format": "svg",                  // optional ("svg" default, or "png")
+  "groupings": [
+    {
+      "label": "Grouping name",     // required (also accepts "name" or "group_name")
+      "code": "OptionalGroupingId",
+      "capability_domains": [
+        {
+          "label": "Domain name",   // required (also accepts "domain_name" or "name")
+          "code": "OptionalDomainId",
+          "capabilities": [
+            {
+              "label": "Capability name",  // required (also accepts "cap_name" or "name")
+              "code": "OptionalCapabilityId"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+\`\`\`
+
+Guidelines:
+- Only \`label\` and \`code\` are used when building the PlantUML; extra metadata (type, description, relationships, etc.) is ignored.
+- The server normalizes common synonyms (\`group_name\`, \`domain_name\`, \`cap_name\`, etc.), but emitting the canonical keys above keeps the payload clear.`;
+        },
+    },
+    {
+        name: 'archimate_diagram_input_format',
+        title: 'ArchiMate Diagram Input Format',
+        description: 'JSON options accepted by generate_archimate_diagram (raw diagram_body or structured groups/elements/relationships).',
+        template: () => {
+            return `### Option 1 – Provide raw PlantUML body
+\`\`\`json
+{
+  "diagram_body": "@startuml\\n...Archimate code...\\n@enduml",
+  "format": "svg"
+}
+\`\`\`
+- If \`diagram_body\` already contains \`@startuml/@enduml\`, it is used as-is.
+- If it omits the tags, the server wraps it inside the ArchiMate template (includes, theme, optional legend).
+
+### Option 2 – Send structured JSON (the server builds the PlantUML)
+\`\`\`json
+{
+  "title": "Optional diagram title",
+  "layout": "left_to_right | top_down | sketch",
+  "theme": "archimate-standard",
+  "include_relationship_legend": false,
+  "use_local_stdlib": false,
+  "groups": [
+    {
+      "label": "Boundary label",     // synonyms: name, group_name
+      "macro": "Boundary",           // default if omitted
+      "elements": [
+        {
+          "macro": "Business_Actor",
+          "label": "Actor Name",
+          "code": "ActorAlias",
+          "note": "Optional note text"
+        }
+      ],
+      "groups": [ /* nested boundaries */ ]
+    }
+  ],
+  "elements": [
+    { "macro": "Application_Component", "label": "Standalone element", "code": "App1" }
+  ],
+  "relationships": [
+    {
+      "type": "Rel_Flow",      // use Rel_XXX macro; alternatively provide "raw_arrow": "..>"
+      "from": "App1",
+      "to": "ActorAlias",
+      "label": "Data transfer"
+    }
+  ],
+  "extra_body": "Optional PlantUML inserted before relationships",
+  "format": "svg"
+}
+\`\`\`
+
+Guidelines:
+- Only \`label\`/\`macro\`/\`code\` fields are consumed when building the diagram; extra metadata is ignored.
+- Synonyms recognized: \`name\`, \`group_name\`, \`domain_name\`, \`cap_name\`, etc.
+- \`relationships[].type\` should reference Rel_XXX helpers; set \`raw_arrow\` when you need custom arrow syntax.
+- Anything not listed above is preserved only in the optional \`extra_body\`.
+- Allowed \`theme\` values: \`archimate-standard\`, \`archimate-alternate\`, \`archimate-saturated\`, \`archimate-lowsaturation\`, \`archimate-handwriting\`.
+
+Use this prompt whenever you need the LLM to craft a valid payload for \`generate_archimate_diagram\`.`;
+        },
     },
 ];
 const STATIC_RESOURCES = [
@@ -648,6 +755,19 @@ class PlantUMLMCPServer {
             return value.trim();
         }
         return undefined;
+    }
+    normalizeArchimateTheme(value) {
+        if (value === undefined || value === null) {
+            return undefined;
+        }
+        if (typeof value !== 'string' || value.trim().length === 0) {
+            throw new Error(`theme must be one of: ${ARCHIMATE_THEMES.join(', ')}`);
+        }
+        const normalized = value.trim().toLowerCase();
+        if (ARCHIMATE_THEME_SET.has(normalized)) {
+            return normalized;
+        }
+        throw new Error(`theme must be one of: ${ARCHIMATE_THEMES.join(', ')}`);
     }
     indentLine(text, indent) {
         const depth = Number.isFinite(indent) && indent > 0 ? indent : 0;
@@ -1143,7 +1263,14 @@ class PlantUMLMCPServer {
                                 },
                                 theme: {
                                     type: 'string',
-                                    description: 'Optional ArchiMate theme name (e.g., archimate-alternate).',
+                                    enum: [
+                                        'archimate-standard',
+                                        'archimate-alternate',
+                                        'archimate-saturated',
+                                        'archimate-lowsaturation',
+                                        'archimate-handwriting',
+                                    ],
+                                    description: 'Optional ArchiMate theme (defaults to archimate-standard).',
                                 },
                                 include_relationship_legend: {
                                     type: 'boolean',
@@ -1597,7 +1724,7 @@ class PlantUMLMCPServer {
         const includeElementsReference = args.include_elements_reference === true;
         const title = this.optionalString(args.title ?? args.diagram_title);
         const layout = this.optionalString(args.layout ?? args.orientation);
-        const theme = this.optionalString(args.theme);
+        const theme = this.normalizeArchimateTheme(args.theme);
         const useLocalStdlib = args.use_local_stdlib === true;
         const extraBody = this.optionalString(args.extra_body ?? args.append_body ?? args.footer);
         const overrideBody = this.optionalString(args.diagram_body ?? args.archimate_body ?? args.body);

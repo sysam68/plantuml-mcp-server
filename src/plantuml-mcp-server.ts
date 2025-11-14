@@ -263,6 +263,16 @@ Group(GroupingBreaBUniqueCode, "Business Area B"){
 }
 @enduml`;
 
+const ARCHIMATE_THEMES = [
+  'archimate-standard',
+  'archimate-alternate',
+  'archimate-saturated',
+  'archimate-lowsaturation',
+  'archimate-handwriting',
+] as const;
+type ArchimateTheme = (typeof ARCHIMATE_THEMES)[number];
+const ARCHIMATE_THEME_SET = new Set<string>(ARCHIMATE_THEMES);
+
 type ArchimateMappingEntry = {
   name: string;
   plantUMLKeyword: string;
@@ -474,7 +484,6 @@ ${DEFAULT_CAPABILITY_LANDSCAPE_SNIPPET}
 Guidelines:
 - Only \`label\` and \`code\` are used when building the PlantUML; extra metadata (type, description, relationships, etc.) is ignored.
 - The server normalizes common synonyms (\`group_name\`, \`domain_name\`, \`cap_name\`, etc.), but emitting the canonical keys above keeps the payload clear.`;
- - The server normalizes common synonyms (\`group_name\`, \`domain_name\`, \`cap_name\`, etc.), but emitting the canonical keys above keeps the payload clear.`;
     },
   },
   {
@@ -537,6 +546,7 @@ Guidelines:
 - Synonyms recognized: \`name\`, \`group_name\`, \`domain_name\`, \`cap_name\`, etc.
 - \`relationships[].type\` should reference Rel_XXX helpers; set \`raw_arrow\` when you need custom arrow syntax.
 - Anything not listed above is preserved only in the optional \`extra_body\`.
+- Allowed \`theme\` values: \`archimate-standard\`, \`archimate-alternate\`, \`archimate-saturated\`, \`archimate-lowsaturation\`, \`archimate-handwriting\`.
 
 Use this prompt whenever you need the LLM to craft a valid payload for \`generate_archimate_diagram\`.`;
     },
@@ -903,6 +913,20 @@ class PlantUMLMCPServer {
       return value.trim();
     }
     return undefined;
+  }
+
+  private normalizeArchimateTheme(value: unknown): ArchimateTheme | undefined {
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      throw new Error(`theme must be one of: ${ARCHIMATE_THEMES.join(', ')}`);
+    }
+    const normalized = value.trim().toLowerCase();
+    if (ARCHIMATE_THEME_SET.has(normalized)) {
+      return normalized as ArchimateTheme;
+    }
+    throw new Error(`theme must be one of: ${ARCHIMATE_THEMES.join(', ')}`);
   }
 
   private indentLine(text: string, indent: number): string {
@@ -1501,7 +1525,14 @@ class PlantUMLMCPServer {
                 },
                 theme: {
                   type: 'string',
-                  description: 'Optional ArchiMate theme name (e.g., archimate-alternate).',
+                  enum: [
+                    'archimate-standard',
+                    'archimate-alternate',
+                    'archimate-saturated',
+                    'archimate-lowsaturation',
+                    'archimate-handwriting',
+                  ],
+                  description: 'Optional ArchiMate theme (defaults to archimate-standard).',
                 },
                 include_relationship_legend: {
                   type: 'boolean',
@@ -2034,7 +2065,7 @@ class PlantUMLMCPServer {
     const includeElementsReference = args.include_elements_reference === true;
     const title = this.optionalString(args.title ?? args.diagram_title);
     const layout = this.optionalString(args.layout ?? args.orientation);
-    const theme = this.optionalString(args.theme);
+    const theme = this.normalizeArchimateTheme(args.theme);
     const useLocalStdlib = args.use_local_stdlib === true;
     const extraBody = this.optionalString(args.extra_body ?? args.append_body ?? args.footer);
     const overrideBody = this.optionalString(args.diagram_body ?? args.archimate_body ?? args.body);
