@@ -29,6 +29,7 @@
     "start": "node dist/plantuml-mcp-server.js",
     "start:stdio": "MCP_TRANSPORT=stdio node dist/plantuml-mcp-server.js",
     "start:sse": "MCP_TRANSPORT=sse node dist/plantuml-mcp-server.js",
+    "test:business-scenario": "node scripts/test_business_scenario_fixture.mjs",
     "prepublishOnly": "npm run build"
   },
   "keywords": [

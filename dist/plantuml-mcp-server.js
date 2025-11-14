@@ -667,10 +667,11 @@ function renderArchimateMappingMarkdown(entries) {
     sortedCategories.forEach((category) => {
         parts.push(`## ${category}`);
         parts.push('');
-        const records = (categoryMap.get(category) ?? []).sort((a, b) => a.name.localeCompare(b.name));
+        const records = (categoryMap.get(category) ?? []).sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
         records.forEach((record) => {
             const description = record.description?.trim();
-            parts.push(`- **${record.name}** → \`${record.plantUMLKeyword}\``);
+            const displayName = record.name?.trim() || 'Unnamed Entry';
+            parts.push(`- **${displayName}** → \`${record.plantUMLKeyword}\``);
             if (description) {
                 parts.push(`  - ${description}`);
             }
@@ -842,7 +843,7 @@ function formatActivationSuffix(state) {
     }
     return '';
 }
-class PlantUMLMCPServer {
+export class PlantUMLMCPServer {
     server;
     defaultAuthorization;
     clientLogLevel;
@@ -2047,7 +2048,7 @@ class PlantUMLMCPServer {
         }
         return result;
     }
-    async generateBusinessScenario(args) {
+    buildBusinessScenarioFromPayload(args) {
         const format = args.format === 'png' ? 'png' : 'svg';
         const title = this.optionalString(args.title ?? args.scenario_title ?? args.name);
         const elementInput = args.elements ?? args.element_definitions ?? args.elementDefinitions ?? args.actors;
@@ -2060,6 +2061,10 @@ class PlantUMLMCPServer {
             sequences,
         };
         const plantumlCode = this.buildBusinessScenarioDocument(definition);
+        return { format, plantumlCode, definition };
+    }
+    async generateBusinessScenario(args) {
+        const { format, plantumlCode } = this.buildBusinessScenarioFromPayload(args);
         const result = await this.generateDiagram({
             plantuml_code: plantumlCode,
             format,
@@ -2824,8 +2829,13 @@ async function start() {
     }
     throw new Error(`Unsupported MCP_TRANSPORT value: ${MCP_TRANSPORT}`);
 }
-start().catch((error) => {
-    logToConsole('error', 'PlantUML MCP server failed to start', error);
-    process.exitCode = 1;
-});
+if (process.env.PLANTUML_MCP_SKIP_AUTO_START === 'true') {
+    logToConsole('info', 'Auto-start skipped (PLANTUML_MCP_SKIP_AUTO_START=true).');
+}
+else {
+    start().catch((error) => {
+        logToConsole('error', 'PlantUML MCP server failed to start', error);
+        process.exitCode = 1;
+    });
+}
 //# sourceMappingURL=plantuml-mcp-server.js.map

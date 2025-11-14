@@ -1,0 +1,24 @@
+{
+  "title": "Archi Print Usage",
+  "format": "svg",
+  "elements": [
+    { "type": "businessActor", "label": "Architect", "code": "architect" },
+    { "type": "applicationComponent", "label": "Archi Client", "code": "archi" },
+    { "type": "applicationFunction", "label": "Update Model", "code": "updateModel", "description": "Refine the architecture draft" },
+    { "type": "applicationFunction", "label": "Print View", "code": "printView" },
+    { "type": "systemSoftware", "label": "Windows Print Service", "code": "windowsPrint" },
+    { "type": "equipment", "label": "Office Printer", "code": "printer" }
+  ],
+  "sequences": [
+    { "kind": "call", "from": "Architect", "to": "Archi Client", "message": "Launch the Archi application", "to_activation": "activate" },
+    { "kind": "call", "from": "Archi Client", "to": "Update Model", "message": "Apply model changes", "to_activation": "activate" },
+    { "kind": "note", "target": "Update Model", "position": "right", "color": "#FFFFA5", "text": "<&document> Architect reviews the delta" },
+    { "kind": "return", "message": "Model updated" },
+    { "kind": "call", "from": "Archi Client", "to": "Print View", "message": "Send view to print queue", "to_activation": "activate" },
+    { "kind": "call", "from": "Print View", "to": "Windows Print Service", "message": "Hand over print job", "arrow": "-->" },
+    { "kind": "call", "from": "Windows Print Service", "to": "Office Printer", "message": "Deliver to hardware" },
+    { "kind": "return", "message": "Job completed" },
+    { "kind": "call", "from": "Print View", "to": "Archi Client", "message": "Confirm completion", "to_activation": "deactivate" },
+    { "kind": "call", "from": "Archi Client", "to": "Architect", "message": "Notify user", "to_activation": "deactivate" }
+  ]
+}

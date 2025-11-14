@@ -1,0 +1,8 @@
+[
+  { "type": "businessActor", "label": "Architect", "code": "architect" },
+  { "type": "applicationComponent", "label": "Archi Client", "code": "archi" },
+  { "type": "applicationFunction", "label": "Update Model", "code": "updateModel", "description": "Refine the architecture draft" },
+  { "type": "applicationFunction", "label": "Print View", "code": "printView" },
+  { "type": "systemSoftware", "label": "Windows Print Service", "code": "windowsPrint" },
+  { "type": "equipment", "label": "Office Printer", "code": "printer" }
+]

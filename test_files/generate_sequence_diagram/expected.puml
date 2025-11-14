@@ -1,0 +1,29 @@
+@startuml
+!global $ARCH_SEQUENCE_SUPPORT = %true()
+!include <archimate/Archimate>
+
+title Archi Print Usage
+
+' Define Elements
+$businessActor("Architect", "architect")
+$applicationComponent("Archi Client", "archi")
+$applicationFunction("Update Model", "updateModel", "Refine the architecture draft")
+$applicationFunction("Print View", "printView")
+$systemSoftware("Windows Print Service", "windowsPrint")
+$equipment("Office Printer", "printer")
+
+' Define Sequence
+architect -> archi ++ : Launch the Archi application
+archi -> updateModel ++ : Apply model changes
+note right updateModel #FFFFA5
+<&document> Architect reviews the delta
+end note
+return Model updated
+archi -> printView ++ : Send view to print queue
+printView --> windowsPrint : Hand over print job
+windowsPrint -> printer : Deliver to hardware
+return Job completed
+printView -> archi -- : Confirm completion
+archi -> architect -- : Notify user
+
+@enduml
