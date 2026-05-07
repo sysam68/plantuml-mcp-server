@@ -128,8 +128,30 @@ const MCP_SSE_MESSAGES_PATH = normalizePath(process.env.MCP_SSE_MESSAGES_PATH ||
 const MCP_API_KEY = process.env.MCP_API_KEY;
 const GENERATED_FILES_DIR = path.resolve(process.env.GENERATED_FILES_DIR || '/generated-files');
 const PUBLIC_FILE_BASE_URL = normalizeBaseUrl(process.env.PUBLIC_FILE_BASE_URL || 'https://ob-file.fmpn.fr/files');
+const OB_FILE_API_BASE_URL = normalizeBaseUrl(process.env.OB_FILE_API_BASE_URL || '');
+const OB_FILE_API_TOKEN = process.env.OB_FILE_API_TOKEN;
+const OB_FILE_OIDC_DISCOVERY_URL = process.env.OB_FILE_OIDC_DISCOVERY_URL || '';
+const OB_FILE_OIDC_TOKEN_ENDPOINT = process.env.OB_FILE_OIDC_TOKEN_ENDPOINT || '';
+const OB_FILE_OIDC_CLIENT_ID = process.env.OB_FILE_OIDC_CLIENT_ID || '';
+const OB_FILE_OIDC_CLIENT_SECRET = process.env.OB_FILE_OIDC_CLIENT_SECRET || '';
+const OB_FILE_OIDC_SCOPE = process.env.OB_FILE_OIDC_SCOPE || 'groups';
+const OB_FILE_OIDC_AUDIENCE = process.env.OB_FILE_OIDC_AUDIENCE || 'ob-file';
+const OB_FILE_OIDC_FORWARDED_PROTO = process.env.OB_FILE_OIDC_FORWARDED_PROTO || '';
+const OB_FILE_OIDC_FORWARDED_HOST = process.env.OB_FILE_OIDC_FORWARDED_HOST || '';
 const MAXIMUM_MESSAGE_SIZE = '4mb';
 const COMPLETION_MAX_RESULTS = 100;
+
+type ObFileOidcMetadata = {
+  token_endpoint?: string;
+};
+
+type CachedAccessToken = {
+  accessToken: string;
+  expiresAt: number;
+};
+
+let obFileOidcMetadataCache: ObFileOidcMetadata | undefined;
+let obFileAccessTokenCache: CachedAccessToken | undefined;
 
 function stringifyForLog(value: unknown): string {
   try {
@@ -137,6 +159,112 @@ function stringifyForLog(value: unknown): string {
   } catch {
     return '[unserializable]';
   }
+}
+
+function hasObFileOidcClientCredentials(): boolean {
+  return Boolean(
+    (OB_FILE_OIDC_DISCOVERY_URL || OB_FILE_OIDC_TOKEN_ENDPOINT) &&
+      OB_FILE_OIDC_CLIENT_ID &&
+      OB_FILE_OIDC_CLIENT_SECRET,
+  );
+}
+
+function buildObFileOidcHeaders(): HeadersInit | undefined {
+  const headers: Record<string, string> = {};
+  if (OB_FILE_OIDC_FORWARDED_PROTO) {
+    headers['X-Forwarded-Proto'] = OB_FILE_OIDC_FORWARDED_PROTO;
+  }
+  if (OB_FILE_OIDC_FORWARDED_HOST) {
+    headers['X-Forwarded-Host'] = OB_FILE_OIDC_FORWARDED_HOST;
+  }
+  return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
+async function getObFileOidcMetadata(): Promise<ObFileOidcMetadata> {
+  if (obFileOidcMetadataCache) {
+    return obFileOidcMetadataCache;
+  }
+
+  if (!OB_FILE_OIDC_DISCOVERY_URL) {
+    throw new Error('OB_FILE_OIDC_DISCOVERY_URL is not configured');
+  }
+
+  const response = await fetch(OB_FILE_OIDC_DISCOVERY_URL, {
+    headers: buildObFileOidcHeaders(),
+  });
+  if (!response.ok) {
+    throw new Error(`OIDC discovery failed with ${response.status}: ${await response.text()}`);
+  }
+
+  const metadata = (await response.json()) as ObFileOidcMetadata;
+  if (!metadata.token_endpoint) {
+    throw new Error('OIDC discovery response missing token_endpoint');
+  }
+
+  obFileOidcMetadataCache = metadata;
+  return metadata;
+}
+
+function requireObFileTokenEndpoint(metadata: ObFileOidcMetadata): string {
+  if (!metadata.token_endpoint) {
+    throw new Error('OIDC discovery response missing token_endpoint');
+  }
+
+  return metadata.token_endpoint;
+}
+
+async function getObFileApiAccessToken(): Promise<string | undefined> {
+  if (hasObFileOidcClientCredentials()) {
+    const now = Date.now();
+    if (obFileAccessTokenCache && obFileAccessTokenCache.expiresAt - now > 60_000) {
+      return obFileAccessTokenCache.accessToken;
+    }
+
+    const tokenEndpoint = OB_FILE_OIDC_TOKEN_ENDPOINT || requireObFileTokenEndpoint(await getObFileOidcMetadata());
+    const requestBody = new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: OB_FILE_OIDC_CLIENT_ID,
+      scope: OB_FILE_OIDC_SCOPE,
+      audience: OB_FILE_OIDC_AUDIENCE,
+    });
+
+    const authorization = Buffer.from(`${OB_FILE_OIDC_CLIENT_ID}:${OB_FILE_OIDC_CLIENT_SECRET}`).toString('base64');
+    const response = await fetch(tokenEndpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${authorization}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        ...(buildObFileOidcHeaders() ?? {}),
+      },
+      body: requestBody.toString(),
+    });
+
+    if (!response.ok) {
+      throw new Error(`OIDC token request failed with ${response.status}: ${await response.text()}`);
+    }
+
+    const payload = (await response.json()) as {
+      access_token?: string;
+      expires_in?: number;
+    };
+
+    if (!payload.access_token) {
+      throw new Error('OIDC token response missing access_token');
+    }
+
+    obFileAccessTokenCache = {
+      accessToken: payload.access_token,
+      expiresAt: now + Math.max(60, payload.expires_in ?? 3600) * 1000,
+    };
+
+    return payload.access_token;
+  }
+
+  if (OB_FILE_API_TOKEN) {
+    return OB_FILE_API_TOKEN;
+  }
+
+  return undefined;
 }
 
 logToConsole('info', `Log level set to ${requestedLogLevel}`);
@@ -451,10 +579,61 @@ rectangle \"Structural Relationships\" as structural {
 }
 @enduml`;
 
-const ARCHIMATE_RELATIONSHIP_LEGEND_BODY = ARCHIMATE_RELATIONSHIP_REFERENCE_SOURCE.split('\n')
-  .filter((_, index, array) => index !== 0 && index !== array.length - 1)
-  .join('\n')
-  .trim();
+const ARCHIMATE_RELATIONSHIP_LEGEND_BODY = `
+!procedure Draw($name, $raw, $rawOverride="")
+    !if ($rawOverride == "")
+        !$showRaw = $raw
+    !else
+        !$showRaw = $rawOverride
+    !endif
+    label $name
+    label "$showRaw" <<mono>> as a$name
+    $name $raw a$name
+!endprocedure
+
+hide stereotype
+<style>
+.mono {
+    FontName monospaced
+}
+</style>
+
+legend left
+Usage:
+**Rel_XXX(from, to, label)**
+or by using raw arrows: A **arrow** B
+end legend
+
+rectangle "Other Relationships" as other {
+    circle "Junction Or\\ncircle id" <<junction>> as c1
+    circle #black "Junction And\\ncircle #black id" <<junction>> as c2
+    c1 -[hidden]- c2
+    Draw(Specialisation, "--|>")
+}
+
+rectangle "Dynamic Dependencies" as dynamic {
+    Draw(Flow, "..>>")
+    Draw(Triggering, "-->>")
+}
+
+rectangle "Dependency Relationships" as dependency {
+    Draw(Association_dir, "--\\\\", "--\\\\\\\\")
+    Draw(Association, " --")
+    Draw(Influence, "..>")
+    Draw(Access_rw, "<-[dotted]->")
+    Draw(Access_w, "-[dotted]->")
+    Draw(Access_r, "<-[dotted]-")
+    Draw(Access, "-[dotted]-")
+    Draw(Serving, "-->")
+}
+
+rectangle "Structural Relationships" as structural {
+    Draw(Realisation, "-[dotted]-|>")
+    Draw(Assignment, "@-->>")
+    Draw(Aggregation, "o--")
+    Draw(Composition, "*--")
+}
+`.trim();
 
 const ARCHIMATE_REFERENCE_PROMPT_BODY = `# ArchiMate Elements & Relationship Reference
 
@@ -575,6 +754,8 @@ Guidelines:
 \`\`\`
 - If \`diagram_body\` already contains \`@startuml/@enduml\`, it is used as-is.
 - If it omits the tags, the server wraps it inside the ArchiMate template (includes, theme, optional legend).
+- In wrapped mode, provide ArchiMate stdlib macros such as \`Business_Object(...)\`, \`Business_Service(...)\`, \`Application_Component(...)\`, \`Rel_Serving(...)\`.
+- Avoid raw UML approximations like \`rectangle "X" <<business-object>>\` when you expect ArchiMate styling; the stdlib macros are the supported path.
 
 ### Option 2 – Send structured JSON (the server builds the PlantUML)
 \`\`\`json
@@ -621,6 +802,7 @@ Guidelines:
 - \`relationships[].type\` should reference Rel_XXX helpers; set \`raw_arrow\` when you need custom arrow syntax.
 - Anything not listed above is preserved only in the optional \`extra_body\`.
 - Allowed \`theme\` values: \`archimate-standard\`, \`archimate-alternate\`, \`archimate-saturated\`, \`archimate-lowsaturation\`, \`archimate-handwriting\`.
+- \`include_relationship_legend: true\` appends only the legend content; it should not duplicate \`!include <archimate/Archimate>\` or global variables.
 
 Use this prompt whenever you need the LLM to craft a valid payload for \`generate_archimate_diagram\`.`;
     },
@@ -864,22 +1046,79 @@ function isInitializationPayload(payload: unknown): boolean {
 
 type StoredDiagramInfo = {
   fileName: string;
-  filePath: string;
+  filePath?: string;
   publicUrl: string;
+  storageBackend: 'ob-file-api' | 'shared-volume';
 };
 
 async function persistDiagramToSharedStorage(content: Buffer, format: string): Promise<StoredDiagramInfo | undefined> {
-  if (!PUBLIC_FILE_BASE_URL) {
+  if (!OB_FILE_API_BASE_URL && !PUBLIC_FILE_BASE_URL) {
     return undefined;
   }
 
   try {
-    await fs.mkdir(GENERATED_FILES_DIR, { recursive: true });
     const fileName = `${randomUUID()}.${format}`;
+
+    if (OB_FILE_API_BASE_URL) {
+      try {
+        const uploadForm = new FormData();
+        uploadForm.set(
+          'file',
+          new Blob([new Uint8Array(content)], { type: `image/${format}` }),
+          fileName,
+        );
+        uploadForm.set('overwrite', 'false');
+
+        const requestHeaders = new Headers();
+        const accessToken = await getObFileApiAccessToken();
+        if (accessToken) {
+          requestHeaders.set('Authorization', `Bearer ${accessToken}`);
+        }
+
+        const uploadResponse = await fetch(`${OB_FILE_API_BASE_URL}/api/files/upload`, {
+          method: 'POST',
+          headers: requestHeaders,
+          body: uploadForm,
+        });
+
+        if (!uploadResponse.ok) {
+          throw new Error(`ob-file upload failed with ${uploadResponse.status}: ${await uploadResponse.text()}`);
+        }
+
+        const publicUrlResponse = await fetch(
+          `${OB_FILE_API_BASE_URL}/api/files/${encodeURIComponent(fileName)}/public-url`,
+          {
+            method: 'POST',
+            headers: requestHeaders,
+          },
+        );
+
+        if (!publicUrlResponse.ok) {
+          throw new Error(
+            `ob-file public-url failed with ${publicUrlResponse.status}: ${await publicUrlResponse.text()}`,
+          );
+        }
+
+        const publicUrlPayload = (await publicUrlResponse.json()) as { download_url?: string };
+        if (!publicUrlPayload.download_url) {
+          throw new Error('ob-file public-url response missing download_url');
+        }
+
+        return {
+          fileName,
+          publicUrl: publicUrlPayload.download_url,
+          storageBackend: 'ob-file-api',
+        };
+      } catch (error) {
+        logToConsole('warning', 'Failed to persist diagram via ob-file API, falling back to shared volume', error);
+      }
+    }
+
+    await fs.mkdir(GENERATED_FILES_DIR, { recursive: true });
     const filePath = path.join(GENERATED_FILES_DIR, fileName);
     await fs.writeFile(filePath, content);
     const publicUrl = `${PUBLIC_FILE_BASE_URL}/${fileName}`;
-    return { fileName, filePath, publicUrl };
+    return { fileName, filePath, publicUrl, storageBackend: 'shared-volume' };
   } catch (error) {
     logToConsole('warning', 'Failed to persist generated diagram to shared storage', error);
     return undefined;
@@ -2325,7 +2564,12 @@ export class PlantUMLMCPServer {
       const diagramBuffer = Buffer.from(await response.arrayBuffer());
       const storedDiagram = await persistDiagramToSharedStorage(diagramBuffer, format);
       if (storedDiagram) {
-        this.log('debug', `Diagram persisted to shared storage at ${storedDiagram.filePath}`);
+        this.log(
+          'debug',
+          storedDiagram.filePath
+            ? `Diagram persisted via ${storedDiagram.storageBackend} at ${storedDiagram.filePath}`
+            : `Diagram persisted via ${storedDiagram.storageBackend} as ${storedDiagram.fileName}`,
+        );
       } else {
         this.log('debug', 'Shared storage disabled; using remote PlantUML URL only.');
       }
@@ -2346,6 +2590,7 @@ export class PlantUMLMCPServer {
           filename: storedDiagram.fileName,
           file_path: storedDiagram.filePath,
           public_url: storedDiagram.publicUrl,
+          backend: storedDiagram.storageBackend,
         };
       }
 
@@ -2360,7 +2605,9 @@ export class PlantUMLMCPServer {
         contentParts.splice(
           2,
           0,
-          `Shared volume filename: \`${storedDiagram.fileName}\` (stored under ${GENERATED_FILES_DIR}).`,
+          storedDiagram.filePath
+            ? `Stored via \`${storedDiagram.storageBackend}\`: \`${storedDiagram.fileName}\` (stored under ${GENERATED_FILES_DIR}).`
+            : `Stored via \`${storedDiagram.storageBackend}\`: \`${storedDiagram.fileName}\`.`,
         );
       }
 
