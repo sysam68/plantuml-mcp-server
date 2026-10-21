@@ -96,18 +96,56 @@ async function main() {
       name: 'generate_plantuml_diagram',
       arguments: {
         plantuml_code: '@startuml\nAlice -> Bob: Hi\n@enduml',
-        format: 'svg',
+        format: 'png',
       },
     });
 
-    const success =
-      callResult?.structuredContent?.success === true ||
-      callResult?.result?.structuredContent?.success === true;
+    const normalizedResult = callResult?.result ?? callResult;
+    const success = normalizedResult?.structuredContent?.success === true;
 
     if (success) {
       pass('tools/call returned structuredContent.success === true');
     } else {
       fail('tools/call did not return success=true', callResult);
+    }
+
+    const imageContent = normalizedResult?.content?.find((entry) => entry.type === 'image');
+    const decodedImage = imageContent?.data ? Buffer.from(imageContent.data, 'base64') : undefined;
+    const hasPngSignature = decodedImage?.subarray(0, 8).toString('hex') === '89504e470d0a1a0a';
+
+    if (
+      imageContent?.mimeType === 'image/png' &&
+      hasPngSignature &&
+      normalizedResult?.structuredContent?.image_embedded === true
+    ) {
+      pass(`tools/call returned native image/png content (${decodedImage.length} bytes)`);
+    } else {
+      fail('tools/call did not return valid native image/png content', callResult);
+    }
+
+    const svgCallResult = await client.callTool({
+      name: 'generate_plantuml_diagram',
+      arguments: {
+        plantuml_code: '@startuml\nAlice -> Bob: SVG with PNG preview\n@enduml',
+        format: 'svg',
+      },
+    });
+    const normalizedSvgResult = svgCallResult?.result ?? svgCallResult;
+    const svgPreview = normalizedSvgResult?.content?.find((entry) => entry.type === 'image');
+    const decodedSvgPreview = svgPreview?.data ? Buffer.from(svgPreview.data, 'base64') : undefined;
+    const hasSvgPreviewPngSignature =
+      decodedSvgPreview?.subarray(0, 8).toString('hex') === '89504e470d0a1a0a';
+
+    if (
+      normalizedSvgResult?.structuredContent?.success === true &&
+      normalizedSvgResult?.structuredContent?.format === 'svg' &&
+      normalizedSvgResult?.structuredContent?.image_embedded === true &&
+      svgPreview?.mimeType === 'image/png' &&
+      hasSvgPreviewPngSignature
+    ) {
+      pass(`SVG tools/call returned native PNG preview (${decodedSvgPreview.length} bytes)`);
+    } else {
+      fail('SVG tools/call did not return a valid native PNG preview', svgCallResult);
     }
   } catch (error) {
     fail('tools/call request failed', error);
@@ -138,7 +176,7 @@ async function safeClose(client, transport) {
 
 async function writeReport(sdkVersion) {
   const reportLines = [
-    '# PlantUML MCP – SDK v1.19.1 Compatibility Report',
+    '# PlantUML MCP – SDK Compatibility Report',
     '',
     `- **SDK version**: ${sdkVersion}`,
     '- **Summary:**',
