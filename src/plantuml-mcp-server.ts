@@ -75,6 +75,15 @@ function parseBoolean(value: string | undefined, fallback: boolean): boolean {
   return fallback;
 }
 
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function normalizeBaseUrl(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
@@ -116,7 +125,7 @@ function logToConsole(level: LogLevel, message: string, error?: unknown) {
   }
 }
 
-const SERVER_VERSION = process.env.npm_package_version || '0.1.3';
+const SERVER_VERSION = process.env.npm_package_version || '0.3.0';
 const PLANTUML_SERVER_URL = process.env.PLANTUML_SERVER_URL || 'https://www.plantuml.com/plantuml';
 const MCP_TRANSPORT = (process.env.MCP_TRANSPORT || 'http').toLowerCase();
 const MCP_HOST = process.env.MCP_HOST || '0.0.0.0';
@@ -139,7 +148,15 @@ const OB_FILE_OIDC_AUDIENCE = process.env.OB_FILE_OIDC_AUDIENCE || 'ob-file';
 const OB_FILE_OIDC_FORWARDED_PROTO = process.env.OB_FILE_OIDC_FORWARDED_PROTO || '';
 const OB_FILE_OIDC_FORWARDED_HOST = process.env.OB_FILE_OIDC_FORWARDED_HOST || '';
 const MAXIMUM_MESSAGE_SIZE = '4mb';
+const MAX_INLINE_IMAGE_BYTES = parsePositiveInteger(
+  process.env.MCP_MAX_INLINE_IMAGE_BYTES,
+  2 * 1024 * 1024,
+);
 const COMPLETION_MAX_RESULTS = 100;
+
+function getDiagramMimeType(format: string): 'image/png' | 'image/svg+xml' {
+  return format === 'png' ? 'image/png' : 'image/svg+xml';
+}
 
 type ObFileOidcMetadata = {
   token_endpoint?: string;
@@ -1064,7 +1081,7 @@ async function persistDiagramToSharedStorage(content: Buffer, format: string): P
         const uploadForm = new FormData();
         uploadForm.set(
           'file',
-          new Blob([new Uint8Array(content)], { type: `image/${format}` }),
+          new Blob([new Uint8Array(content)], { type: getDiagramMimeType(format) }),
           fileName,
         );
         uploadForm.set('overwrite', 'false');
@@ -1823,6 +1840,9 @@ export class PlantUMLMCPServer {
                 diagram_url: { type: 'string', format: 'uri' },
                 markdown_embed: { type: 'string' },
                 encoded_diagram: { type: 'string' },
+                image_embedded: { type: 'boolean' },
+                image_mime_type: { type: 'string' },
+                image_size_bytes: { type: 'integer' },
                 validation_failed: { type: 'boolean' },
                 error_details: {
                   type: 'object',
@@ -1899,6 +1919,9 @@ export class PlantUMLMCPServer {
                 diagram_url: { type: 'string', format: 'uri' },
                 markdown_embed: { type: 'string' },
                 encoded_diagram: { type: 'string' },
+                image_embedded: { type: 'boolean' },
+                image_mime_type: { type: 'string' },
+                image_size_bytes: { type: 'integer' },
                 remote_plantuml_url: { type: 'string', format: 'uri' },
                 shared_storage: {
                   type: 'object',
@@ -2112,6 +2135,9 @@ export class PlantUMLMCPServer {
                 diagram_url: { type: 'string', format: 'uri' },
                 markdown_embed: { type: 'string' },
                 encoded_diagram: { type: 'string' },
+                image_embedded: { type: 'boolean' },
+                image_mime_type: { type: 'string' },
+                image_size_bytes: { type: 'integer' },
                 remote_plantuml_url: { type: 'string', format: 'uri' },
                 shared_storage: {
                   type: 'object',
@@ -2196,6 +2222,9 @@ export class PlantUMLMCPServer {
                 diagram_url: { type: 'string', format: 'uri' },
                 markdown_embed: { type: 'string' },
                 encoded_diagram: { type: 'string' },
+                image_embedded: { type: 'boolean' },
+                image_mime_type: { type: 'string' },
+                image_size_bytes: { type: 'integer' },
                 remote_plantuml_url: { type: 'string', format: 'uri' },
                 shared_storage: {
                   type: 'object',
@@ -2512,7 +2541,7 @@ export class PlantUMLMCPServer {
 
   private async generateDiagram(args: Record<string, unknown>) {
     const plantumlCode = typeof args.plantuml_code === 'string' ? args.plantuml_code : undefined;
-    const format = typeof args.format === 'string' ? args.format : 'svg';
+    const format = args.format === 'png' ? 'png' : 'svg';
 
     if (!plantumlCode) {
       throw new Error('plantuml_code is required');
@@ -2562,6 +2591,28 @@ export class PlantUMLMCPServer {
       }
 
       const diagramBuffer = Buffer.from(await response.arrayBuffer());
+      let inlineImageBuffer: Buffer | undefined = diagramBuffer;
+      let imageMimeType = getDiagramMimeType(format);
+
+      if (format === 'svg') {
+        const pngPreviewUrl = `${PLANTUML_SERVER_URL}/png/${encoded}`;
+        this.log('debug', `Requesting PNG preview for native MCP image content from ${pngPreviewUrl}`);
+        const pngPreviewResponse = await fetch(pngPreviewUrl);
+        if (pngPreviewResponse.ok) {
+          inlineImageBuffer = Buffer.from(await pngPreviewResponse.arrayBuffer());
+          imageMimeType = 'image/png';
+        } else {
+          this.log(
+            'warning',
+            `PNG preview unavailable (${pngPreviewResponse.status}: ${pngPreviewResponse.statusText}); returning SVG URL without native image content.`,
+          );
+          inlineImageBuffer = undefined;
+          imageMimeType = 'image/png';
+        }
+      }
+
+      const imageSizeBytes = inlineImageBuffer?.length ?? 0;
+      const imageEmbedded = Boolean(inlineImageBuffer && imageSizeBytes <= MAX_INLINE_IMAGE_BYTES);
       const storedDiagram = await persistDiagramToSharedStorage(diagramBuffer, format);
       if (storedDiagram) {
         this.log(
@@ -2583,6 +2634,9 @@ export class PlantUMLMCPServer {
         markdown_embed: markdownEmbed,
         encoded_diagram: encoded,
         remote_plantuml_url: remoteDiagramUrl,
+        image_embedded: imageEmbedded,
+        image_mime_type: imageMimeType,
+        image_size_bytes: imageSizeBytes,
       } as Record<string, unknown>;
 
       if (storedDiagram) {
@@ -2611,14 +2665,35 @@ export class PlantUMLMCPServer {
         );
       }
 
+      contentParts.push(
+        imageEmbedded
+          ? `${format === 'svg' ? 'PNG preview' : 'Rendered image'} attached as native MCP content (${imageMimeType}, ${imageSizeBytes} bytes).`
+          : imageSizeBytes > MAX_INLINE_IMAGE_BYTES
+            ? `Rendered image omitted from native MCP content because it exceeds the ${MAX_INLINE_IMAGE_BYTES}-byte inline limit.`
+            : 'Rendered image preview could not be attached as native MCP content.',
+      );
+
+      const content: Array<
+        | { type: 'text'; text: string }
+        | { type: 'image'; data: string; mimeType: string }
+      > = [
+        {
+          type: 'text',
+          text: contentParts.join('\n\n'),
+        },
+      ];
+
+      if (imageEmbedded) {
+        content.push({
+          type: 'image',
+          data: inlineImageBuffer!.toString('base64'),
+          mimeType: imageMimeType,
+        });
+      }
+
       return {
         structuredContent,
-        content: [
-          {
-            type: 'text',
-            text: contentParts.join('\n\n'),
-          },
-        ],
+        content,
       };
     } catch (error) {
       this.log('error', 'Error generating PlantUML diagram', error);
