@@ -135,8 +135,6 @@ const MCP_HTTP_ENABLE_JSON_RESPONSES = parseBoolean(process.env.MCP_HTTP_ENABLE_
 const MCP_SSE_PATH = normalizePath(process.env.MCP_SSE_PATH || '/sse');
 const MCP_SSE_MESSAGES_PATH = normalizePath(process.env.MCP_SSE_MESSAGES_PATH || '/messages');
 const MCP_API_KEY = process.env.MCP_API_KEY;
-const GENERATED_FILES_DIR = path.resolve(process.env.GENERATED_FILES_DIR || '/generated-files');
-const PUBLIC_FILE_BASE_URL = normalizeBaseUrl(process.env.PUBLIC_FILE_BASE_URL || 'https://ob-file.fmpn.fr/files');
 const OB_FILE_API_BASE_URL = normalizeBaseUrl(process.env.OB_FILE_API_BASE_URL || '');
 const OB_FILE_API_TOKEN = process.env.OB_FILE_API_TOKEN;
 const OB_FILE_OIDC_DISCOVERY_URL = process.env.OB_FILE_OIDC_DISCOVERY_URL || '';
@@ -147,6 +145,7 @@ const OB_FILE_OIDC_SCOPE = process.env.OB_FILE_OIDC_SCOPE || 'groups';
 const OB_FILE_OIDC_AUDIENCE = process.env.OB_FILE_OIDC_AUDIENCE || 'ob-file';
 const OB_FILE_OIDC_FORWARDED_PROTO = process.env.OB_FILE_OIDC_FORWARDED_PROTO || '';
 const OB_FILE_OIDC_FORWARDED_HOST = process.env.OB_FILE_OIDC_FORWARDED_HOST || '';
+const EXPOSE_PROMPT_AS_TOOL = parseBoolean(process.env.EXPOSE_PROMPT_AS_TOOL, false);
 const MAXIMUM_MESSAGE_SIZE = '4mb';
 const MAX_INLINE_IMAGE_BYTES = parsePositiveInteger(
   process.env.MCP_MAX_INLINE_IMAGE_BYTES,
@@ -302,6 +301,10 @@ const ARCHIMATE_SAMPLE_FALLBACK = `@startuml
 Business_Actor(FallbackActor, \"Business Actor\")
 @enduml`;
 
+function normalizeMappingKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 const ARCHIMATE_ELEMENTS_REFERENCE_SOURCE = await (async () => {
   for (const candidate of ARCHIMATE_SAMPLE_CANDIDATES) {
     try {
@@ -329,8 +332,76 @@ type PromptDefinition = {
   title?: string;
   description: string;
   arguments?: PromptArgument[];
-  template: (args?: PromptTemplateArgs) => string;
+  template?: (args?: PromptTemplateArgs) => string;
+  documentationFile?: string;
 };
+
+const DOCUMENTATION_PATH_CANDIDATES = [
+  path.resolve(MODULE_DIR, '../documentation'),
+  path.resolve(MODULE_DIR, '../../documentation'),
+  path.resolve(MODULE_DIR, '../../../documentation'),
+  path.resolve(process.cwd(), 'documentation'),
+];
+
+function getDocumentationPathCandidates(fileName: string): string[] {
+  return DOCUMENTATION_PATH_CANDIDATES.map((basePath) => path.resolve(basePath, fileName));
+}
+
+async function readDocumentationFile(fileName: string): Promise<string> {
+  for (const candidate of getDocumentationPathCandidates(fileName)) {
+    try {
+      const data = await fs.readFile(candidate, 'utf8');
+      logToConsole('debug', `Loaded documentation file from ${candidate}`);
+      return data.trim();
+    } catch {
+      // Continue to next candidate
+    }
+  }
+
+  throw new Error(`Unable to load documentation file "${fileName}" from any known location.`);
+}
+
+async function renderPromptText(prompt: PromptDefinition, args?: PromptTemplateArgs): Promise<string> {
+  if (prompt.documentationFile) {
+    return readDocumentationFile(prompt.documentationFile);
+  }
+  if (prompt.template) {
+    return prompt.template(args);
+  }
+  throw new Error(`Prompt "${prompt.name}" has no template or documentation file configured.`);
+}
+
+function promptToToolDefinition(prompt: PromptDefinition) {
+  const properties = Object.fromEntries(
+    (prompt.arguments ?? []).map((argument) => [
+      argument.name,
+      {
+        type: 'string',
+        description: argument.description ?? `Argument "${argument.name}" passed to prompt ${prompt.name}.`,
+      },
+    ]),
+  );
+
+  return {
+    name: prompt.name,
+    title: prompt.title,
+    description: `${prompt.description} Returns the prompt content as plain text for tool-only MCP clients.`,
+    inputSchema: {
+      type: 'object',
+      properties,
+      required: (prompt.arguments ?? []).filter((argument) => argument.required).map((argument) => argument.name),
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        prompt_name: { type: 'string' },
+        content: { type: 'string' },
+      },
+      required: ['success', 'prompt_name', 'content'],
+    },
+  };
+}
 
 const PLANTUML_ERROR_PROMPT_BODY = `## PlantUML MCP Server - Error Handling & Auto-Fix Guide
 
@@ -493,7 +564,9 @@ const BUSINESS_SCENARIO_ELEMENT_TYPE_ALIASES: Record<string, BusinessScenarioEle
 };
 
 type ArchimateMappingEntry = {
-  name: string;
+  // Older versions used `name`; the current mapping file uses `class`.
+  name?: string;
+  class?: string;
   plantUMLKeyword: string;
   category?: string;
   description?: string;
@@ -524,6 +597,60 @@ const ARCHIMATE_MAPPING_DATA = await (async () => {
   );
   return [] as ArchimateMappingEntry[];
 })();
+
+const ARCHIMATE_PLANTUML_KEYWORD_MAP = (() => {
+  const map = new Map<string, string>();
+  ARCHIMATE_MAPPING_DATA.forEach((entry) => {
+    if (!entry || typeof entry !== 'object') {
+      return;
+    }
+    const keyword = typeof entry.plantUMLKeyword === 'string' ? entry.plantUMLKeyword : undefined;
+    if (!keyword) {
+      return;
+    }
+    map.set(normalizeMappingKey(keyword), keyword);
+    const name = typeof entry.name === 'string' ? entry.name : undefined;
+    const clazz = typeof entry.class === 'string' ? entry.class : undefined;
+    if (name) {
+      map.set(normalizeMappingKey(name), keyword);
+    }
+    if (clazz) {
+      map.set(normalizeMappingKey(clazz), keyword);
+    }
+  });
+  return map;
+})();
+
+const ARCHIMATE_MACRO_REFERENCE_MAP = new Map<string, ArchimateMappingEntry>();
+ARCHIMATE_MAPPING_DATA.forEach((entry) => {
+  if (entry?.plantUMLKeyword) {
+    ARCHIMATE_MACRO_REFERENCE_MAP.set(entry.plantUMLKeyword.toLowerCase(), entry);
+  }
+});
+
+const ARCHIMATE_RELATIONSHIP_LEGEND_ROWS = [
+  ['Composition', '*--'],
+  ['Aggregation', 'o--'],
+  ['Assignment', '@-->>'],
+  ['Realization', '..|>'],
+  ['Serving', '-->'],
+  ['Access', '..'],
+  ['Influence', '..>'],
+  ['Triggering', '-->>'],
+  ['Flow', '..>>'],
+  ['Specialization', '--|>'],
+  ['Association', '--'],
+] as const;
+
+const ARCHIMATE_RELATIONSHIP_LEGEND_MAP = new Map<string, string>(
+  ARCHIMATE_RELATIONSHIP_LEGEND_ROWS.map(([name, arrow]) => [name.toLowerCase(), arrow]),
+);
+
+const ARCHIMATE_ARROW_RELATIONSHIP_MAP = new Map<string, string>(
+  ARCHIMATE_RELATIONSHIP_LEGEND_ROWS.map(([name, arrow]) => [arrow, name]),
+);
+
+type ArchimateLegendType = 'relationship' | 'element_type' | 'layer' | 'mixed';
 
 const ARCHIMATE_RELATIONSHIP_REFERENCE_SOURCE = `@startuml
 
@@ -559,41 +686,9 @@ hide stereotype
 }
 </style>
 
-legend left
-Usage:
-**Rel_XXX(from, to, label)**
-or by using raw arrows: A **arrow** B
-end legend
-
-rectangle \"Other Relationships\" as other {
-    circle \"Junction Or\\ncircle id\" <<junction>> as c1
-    circle #black \"Junction And\\ncircle #black id\" <<junction>> as c2
-    c1 -[hidden]- c2
-    Draw(Specialisation, \"--|>\")
-}
-
-rectangle \"Dynamic Dependencies\" as dynamic {
-    Draw(Flow, \"..>>\")
-    Draw(Triggering, \"-->>\")
-}
-
-rectangle \"Dependency Relationships\" as dependency {
-    Draw(Association_dir, \"--\\\\\", \"--\\\\\\\\\")
-    Draw(Association, \" --\")
-    Draw(Influence, \"..>\")
-    Draw(Access_rw, \"<-[dotted]->\")
-    Draw(Access_w, \"-[dotted]->\")
-    Draw(Access_r, \"<-[dotted]-\")
-    Draw(Access, \"-[dotted]-\")
-    Draw(Serving, \"-->\")
-}
-
-rectangle \"Structural Relationships\" as structural {
-    Draw(Realisation, \"-[dotted]-|>\")
-    Draw(Assignment, \"@-->>\")
-    Draw(Aggregation, \"o--\")
-    Draw(Composition, \"*--\")
-}
+legend right
+|= Relationship |= Arrow |
+${ARCHIMATE_RELATIONSHIP_LEGEND_ROWS.map(([name, value]) => `| ${name} | ${value} |`).join('\n')}
 @enduml`;
 
 const ARCHIMATE_RELATIONSHIP_LEGEND_BODY = `
@@ -615,41 +710,9 @@ hide stereotype
 }
 </style>
 
-legend left
-Usage:
-**Rel_XXX(from, to, label)**
-or by using raw arrows: A **arrow** B
-end legend
-
-rectangle "Other Relationships" as other {
-    circle "Junction Or\\ncircle id" <<junction>> as c1
-    circle #black "Junction And\\ncircle #black id" <<junction>> as c2
-    c1 -[hidden]- c2
-    Draw(Specialisation, "--|>")
-}
-
-rectangle "Dynamic Dependencies" as dynamic {
-    Draw(Flow, "..>>")
-    Draw(Triggering, "-->>")
-}
-
-rectangle "Dependency Relationships" as dependency {
-    Draw(Association_dir, "--\\\\", "--\\\\\\\\")
-    Draw(Association, " --")
-    Draw(Influence, "..>")
-    Draw(Access_rw, "<-[dotted]->")
-    Draw(Access_w, "-[dotted]->")
-    Draw(Access_r, "<-[dotted]-")
-    Draw(Access, "-[dotted]-")
-    Draw(Serving, "-->")
-}
-
-rectangle "Structural Relationships" as structural {
-    Draw(Realisation, "-[dotted]-|>")
-    Draw(Assignment, "@-->>")
-    Draw(Aggregation, "o--")
-    Draw(Composition, "*--")
-}
+legend right
+|= Relationship |= Arrow |
+${ARCHIMATE_RELATIONSHIP_LEGEND_ROWS.map(([name, value]) => `| ${name} | ${value} |`).join('\n')}
 `.trim();
 
 const ARCHIMATE_REFERENCE_PROMPT_BODY = `# ArchiMate Elements & Relationship Reference
@@ -721,6 +784,13 @@ ${DEFAULT_CAPABILITY_LANDSCAPE_SNIPPET}
     template: () => ARCHIMATE_REFERENCE_PROMPT_BODY,
   },
   {
+    name: 'archimate_macro_reference',
+    title: 'ArchiMate Macro Reference for generate_archimate_diagram',
+    description:
+      'Official ArchiMate element and relationship macros to use with generate_archimate_diagram, sourced from documentation.',
+    documentationFile: 'archimate_macro_reference.md',
+  },
+  {
     name: 'capability_landscape_input_format',
     title: 'Capability Landscape Input Format',
     description: 'JSON schema to send to generate_capability_landscape (groupings → capability_domains → capabilities).',
@@ -781,6 +851,7 @@ Guidelines:
   "layout": "left_to_right | top_down | sketch",
   "theme": "archimate-standard",
   "include_relationship_legend": false,
+  "legend_type": "relationship | element_type | layer | mixed",
   "use_local_stdlib": false,
   "groups": [
     {
@@ -820,6 +891,7 @@ Guidelines:
 - Anything not listed above is preserved only in the optional \`extra_body\`.
 - Allowed \`theme\` values: \`archimate-standard\`, \`archimate-alternate\`, \`archimate-saturated\`, \`archimate-lowsaturation\`, \`archimate-handwriting\`.
 - \`include_relationship_legend: true\` appends only the legend content; it should not duplicate \`!include <archimate/Archimate>\` or global variables.
+- \`legend_type\` controls the legend format: \`relationship\`, \`element_type\`, \`layer\`, or \`mixed\`. If omitted and \`include_relationship_legend\` is true, the default is \`relationship\`.
 
 Use this prompt whenever you need the LLM to craft a valid payload for \`generate_archimate_diagram\`.`;
     },
@@ -970,11 +1042,11 @@ function renderArchimateMappingMarkdown(entries: ArchimateMappingEntry[]): strin
     parts.push('');
 
     const records = (categoryMap.get(category) ?? []).sort((a, b) =>
-      (a.name ?? '').localeCompare(b.name ?? ''),
+      (a.name ?? a.class ?? '').localeCompare(b.name ?? b.class ?? ''),
     );
     records.forEach((record) => {
       const description = record.description?.trim();
-      const displayName = record.name?.trim() || 'Unnamed Entry';
+      const displayName = record.name?.trim() || record.class?.trim() || 'Unnamed Entry';
       parts.push(`- **${displayName}** → \`${record.plantUMLKeyword}\``);
       if (description) {
         parts.push(`  - ${description}`);
@@ -1063,82 +1135,68 @@ function isInitializationPayload(payload: unknown): boolean {
 
 type StoredDiagramInfo = {
   fileName: string;
-  filePath?: string;
   publicUrl: string;
-  storageBackend: 'ob-file-api' | 'shared-volume';
+  storageBackend: 'ob-file-api';
 };
 
-async function persistDiagramToSharedStorage(content: Buffer, format: string): Promise<StoredDiagramInfo | undefined> {
-  if (!OB_FILE_API_BASE_URL && !PUBLIC_FILE_BASE_URL) {
-    return undefined;
+async function persistDiagramToObFile(content: Buffer, format: string): Promise<StoredDiagramInfo> {
+  if (!OB_FILE_API_BASE_URL) {
+    throw new Error('OB_FILE_API_BASE_URL must be configured. Diagram generation now requires ob-file.');
   }
 
   try {
     const fileName = `${randomUUID()}.${format}`;
+    const uploadForm = new FormData();
+    uploadForm.set(
+      'file',
+      new Blob([new Uint8Array(content)], { type: getDiagramMimeType(format) }),
+      fileName,
+    );
+    uploadForm.set('overwrite', 'false');
 
-    if (OB_FILE_API_BASE_URL) {
-      try {
-        const uploadForm = new FormData();
-        uploadForm.set(
-          'file',
-          new Blob([new Uint8Array(content)], { type: getDiagramMimeType(format) }),
-          fileName,
-        );
-        uploadForm.set('overwrite', 'false');
-
-        const requestHeaders = new Headers();
-        const accessToken = await getObFileApiAccessToken();
-        if (accessToken) {
-          requestHeaders.set('Authorization', `Bearer ${accessToken}`);
-        }
-
-        const uploadResponse = await fetch(`${OB_FILE_API_BASE_URL}/api/files/upload`, {
-          method: 'POST',
-          headers: requestHeaders,
-          body: uploadForm,
-        });
-
-        if (!uploadResponse.ok) {
-          throw new Error(`ob-file upload failed with ${uploadResponse.status}: ${await uploadResponse.text()}`);
-        }
-
-        const publicUrlResponse = await fetch(
-          `${OB_FILE_API_BASE_URL}/api/files/${encodeURIComponent(fileName)}/public-url`,
-          {
-            method: 'POST',
-            headers: requestHeaders,
-          },
-        );
-
-        if (!publicUrlResponse.ok) {
-          throw new Error(
-            `ob-file public-url failed with ${publicUrlResponse.status}: ${await publicUrlResponse.text()}`,
-          );
-        }
-
-        const publicUrlPayload = (await publicUrlResponse.json()) as { download_url?: string };
-        if (!publicUrlPayload.download_url) {
-          throw new Error('ob-file public-url response missing download_url');
-        }
-
-        return {
-          fileName,
-          publicUrl: publicUrlPayload.download_url,
-          storageBackend: 'ob-file-api',
-        };
-      } catch (error) {
-        logToConsole('warning', 'Failed to persist diagram via ob-file API, falling back to shared volume', error);
-      }
+    const requestHeaders = new Headers();
+    const accessToken = await getObFileApiAccessToken();
+    if (accessToken) {
+      requestHeaders.set('Authorization', `Bearer ${accessToken}`);
     }
 
-    await fs.mkdir(GENERATED_FILES_DIR, { recursive: true });
-    const filePath = path.join(GENERATED_FILES_DIR, fileName);
-    await fs.writeFile(filePath, content);
-    const publicUrl = `${PUBLIC_FILE_BASE_URL}/${fileName}`;
-    return { fileName, filePath, publicUrl, storageBackend: 'shared-volume' };
+    const uploadResponse = await fetch(`${OB_FILE_API_BASE_URL}/api/files/upload`, {
+      method: 'POST',
+      headers: requestHeaders,
+      body: uploadForm,
+    });
+
+    if (!uploadResponse.ok) {
+      throw new Error(`ob-file upload failed with ${uploadResponse.status}: ${await uploadResponse.text()}`);
+    }
+
+    const publicUrlResponse = await fetch(
+      `${OB_FILE_API_BASE_URL}/api/files/${encodeURIComponent(fileName)}/public-url`,
+      {
+        method: 'POST',
+        headers: requestHeaders,
+      },
+    );
+
+    if (!publicUrlResponse.ok) {
+      throw new Error(
+        `ob-file public-url failed with ${publicUrlResponse.status}: ${await publicUrlResponse.text()}`,
+      );
+    }
+
+    const publicUrlPayload = (await publicUrlResponse.json()) as { download_url?: string };
+    if (!publicUrlPayload.download_url) {
+      throw new Error('ob-file public-url response missing download_url');
+    }
+
+    return {
+      fileName,
+      publicUrl: publicUrlPayload.download_url,
+      storageBackend: 'ob-file-api',
+    };
   } catch (error) {
-    logToConsole('warning', 'Failed to persist generated diagram to shared storage', error);
-    return undefined;
+    logToConsole('warning', 'Failed to persist generated diagram via ob-file API', error);
+    throw error;
   }
 }
 
@@ -1203,13 +1261,29 @@ type BusinessScenarioDefinition = {
   sequences: BusinessScenarioInstruction[];
 };
 
+const ARCHIMATE_RESERVED_IDENTIFIERS = new Set([
+  // PlantUML keywords / tokens that frequently break aliases.
+  'as',
+  'end',
+  'note',
+  'legend',
+  'title',
+  'package',
+  'namespace',
+  'class',
+  'interface',
+  'enum',
+  'skinparam',
+]);
+
 function sanitizeIdentifier(value: string, fallbackPrefix: string): string {
   const normalized = value
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^A-Za-z0-9_]/g, '');
   if (normalized) {
-    return normalized;
+    const candidate = /^[A-Za-z_]/.test(normalized) ? normalized : `${fallbackPrefix}_${normalized}`;
+    return ARCHIMATE_RESERVED_IDENTIFIERS.has(candidate.toLowerCase()) ? `${fallbackPrefix}_${candidate}` : candidate;
   }
   return `${fallbackPrefix}${randomUUID().replace(/[^A-Za-z0-9]/g, '').slice(0, 10)}`;
 }
@@ -1222,6 +1296,91 @@ function ensureIdentifier(candidate: unknown, fallbackLabel: string, fallbackPre
     return sanitizeIdentifier(fallbackLabel, fallbackPrefix);
   }
   return sanitizeIdentifier('', fallbackPrefix);
+}
+
+const ARCHIMATE_MACRO_ALIASES: Record<string, string> = {
+  // Compatibility aliases for environments where users provide “intuitive” macro names
+  // that are not always available in the ArchiMate stdlib on the target PlantUML server.
+  //
+  // NOTE: We apply these aliases only in a retry path (after a validation failure) so
+  // we don't override macros that *do* exist in a given stdlib/version.
+  ApplicationComponent: 'Application_Component',
+  applicationcomponent: 'Application_Component',
+};
+
+function normalizeArchimateMacroName(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const mapped = ARCHIMATE_PLANTUML_KEYWORD_MAP.get(normalizeMappingKey(trimmed));
+  if (mapped) {
+    return mapped;
+  }
+  return ARCHIMATE_MACRO_ALIASES[trimmed] ?? ARCHIMATE_MACRO_ALIASES[trimmed.toLowerCase()] ?? trimmed;
+}
+
+function rewriteArchimateBody(body: string): string {
+  // Lightweight “auto-fix” for raw diagram bodies:
+  // - replace a few known-missing macros with available equivalents
+  // - avoid PlantUML reserved aliases like `as`
+  // This is intentionally conservative; it only rewrites macro call names and the first argument identifier.
+  const rewrittenMacro = body
+    .split('\n')
+    .map((line) => {
+      const match = line.match(/^(\s*)([A-Za-z0-9_]+)(\s*\()/);
+      if (!match) {
+        return line;
+      }
+      const macro = match[2];
+      const normalized = normalizeArchimateMacroName(macro);
+      if (normalized === macro) {
+        return line;
+      }
+      return `${match[1]}${normalized}${line.slice(match[1].length + macro.length)}`;
+    })
+    .join('\n');
+
+  const lines = rewrittenMacro.split('\n');
+  const identifierRewrites = new Map<string, string>();
+
+  const rewrittenLines = lines.map((line) => {
+    if (line.trim().startsWith("'")) {
+      return line;
+    }
+    const match = line.match(/^(\s*[A-Za-z0-9_]+\s*\()\s*([A-Za-z_][A-Za-z0-9_]*)\s*,/);
+    if (!match) {
+      return line;
+    }
+    const identifier = match[2];
+    const normalizedId = ARCHIMATE_RESERVED_IDENTIFIERS.has(identifier.toLowerCase())
+      ? `id_${identifier}`
+      : identifier;
+    if (normalizedId !== identifier) {
+      identifierRewrites.set(identifier, normalizedId);
+      return line.replace(identifier, normalizedId);
+    }
+    return line;
+  });
+
+  if (identifierRewrites.size === 0) {
+    return rewrittenLines.join('\n');
+  }
+
+  // Second pass: replace plain identifier references (relationships, notes) using word boundaries.
+  let joined = rewrittenLines.join('\n');
+  for (const [from, to] of identifierRewrites.entries()) {
+    const pattern = new RegExp(`\\b${from}\\b`, 'g');
+    joined = joined.replace(pattern, to);
+  }
+  return joined;
+}
+
+function rewriteArchimateBodyForCompatibility(body: string): string {
+  // Second-chance rewrite used only after validation fails:
+  // - currently same as rewriteArchimateBody (macro mapping + reserved identifiers).
+  // Keep as a dedicated hook for future error-driven rewrites.
+  return rewriteArchimateBody(body);
 }
 
 function buildCapabilityLandscapeSnippet(groupings: CapabilityGrouping[]): string {
@@ -1403,8 +1562,343 @@ export class PlantUMLMCPServer {
     throw new Error(`theme must be one of: ${ARCHIMATE_THEMES.join(', ')}`);
   }
 
+  private normalizeArchimateLegendType(value: unknown): ArchimateLegendType | undefined {
+    if (value === undefined || value === null) {
+      return undefined;
+    }
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      throw new Error('legend_type must be one of: relationship, element_type, layer, mixed');
+    }
+    const normalized = value.trim().toLowerCase();
+    if (
+      normalized === 'relationship' ||
+      normalized === 'element_type' ||
+      normalized === 'layer' ||
+      normalized === 'mixed'
+    ) {
+      return normalized;
+    }
+    throw new Error('legend_type must be one of: relationship, element_type, layer, mixed');
+  }
+
   private escapePlantUMLString(value: string): string {
     return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+  }
+
+  private extractArchimateMacrosFromBodyLines(lines: string[]): string[] {
+    const macros: string[] = [];
+    const macroPattern = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(/;
+
+    lines.forEach((line) => {
+      const match = line.match(macroPattern);
+      if (!match) {
+        return;
+      }
+      const macro = match[1];
+      if (macro === 'note' || macro.startsWith('Rel_')) {
+        return;
+      }
+      macros.push(macro);
+    });
+
+    return macros;
+  }
+
+  private extractArchimateRelationshipNamesFromBodyLines(lines: string[]): string[] {
+    const relationshipNames: string[] = [];
+    const relationshipMacroPattern = /\bRel_([A-Za-z0-9_]+)\s*\(/;
+    const relationshipArrows = [...ARCHIMATE_ARROW_RELATIONSHIP_MAP.keys()].sort((left, right) => right.length - left.length);
+
+    lines.forEach((line) => {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("'")) {
+        return;
+      }
+
+      const macroMatch = trimmed.match(relationshipMacroPattern);
+      if (macroMatch) {
+        relationshipNames.push(this.normalizeRelationshipLegendName(macroMatch[1]));
+        return;
+      }
+
+      const matchedArrow = relationshipArrows.find((arrow) => trimmed.includes(` ${arrow} `));
+      if (matchedArrow) {
+        const relationshipName = ARCHIMATE_ARROW_RELATIONSHIP_MAP.get(matchedArrow);
+        if (relationshipName) {
+          relationshipNames.push(relationshipName);
+        }
+      }
+    });
+
+    return relationshipNames;
+  }
+
+  private collectArchimateMacrosFromStructuredInput(args: Record<string, unknown>): string[] {
+    const macros: string[] = [];
+
+    const collectElements = (input: unknown) => {
+      if (!Array.isArray(input)) {
+        return;
+      }
+      input.forEach((entry) => {
+        if (!entry || typeof entry !== 'object') {
+          return;
+        }
+        const record = entry as Record<string, unknown>;
+        const rawLine = this.optionalString(record.raw ?? record.line);
+        if (rawLine) {
+          macros.push(...this.extractArchimateMacrosFromBodyLines([rawLine]));
+          return;
+        }
+        const macro = this.optionalString(record.macro ?? record.type);
+        if (macro) {
+          macros.push(normalizeArchimateMacroName(macro));
+        }
+      });
+    };
+
+    const collectGroups = (input: unknown) => {
+      if (!Array.isArray(input)) {
+        return;
+      }
+      input.forEach((entry) => {
+        if (!entry || typeof entry !== 'object') {
+          return;
+        }
+        const record = entry as Record<string, unknown>;
+        const rawLine = this.optionalString(record.raw ?? record.line);
+        if (rawLine) {
+          macros.push(...this.extractArchimateMacrosFromBodyLines([rawLine]));
+          return;
+        }
+        const macro = this.optionalString(
+          record.macro ?? record.kind ?? record.boundary ?? record.type ?? record.component,
+        );
+        if (macro) {
+          macros.push(normalizeArchimateMacroName(macro));
+        }
+        collectElements(record.elements);
+        collectGroups(record.groups ?? record.children);
+      });
+    };
+
+    collectGroups(args.groups ?? args.boundaries ?? args.areas);
+    collectElements(args.elements);
+    return macros;
+  }
+
+  private collectArchimateRelationshipNamesFromStructuredInput(args: Record<string, unknown>): string[] {
+    if (!Array.isArray(args.relationships)) {
+      return [];
+    }
+
+    const relationshipNames: string[] = [];
+
+    args.relationships.forEach((entry) => {
+      if (typeof entry === 'string') {
+        relationshipNames.push(...this.extractArchimateRelationshipNamesFromBodyLines([entry]));
+        return;
+      }
+
+      if (!entry || typeof entry !== 'object') {
+        return;
+      }
+
+      const record = entry as Record<string, unknown>;
+      const rawLine = this.optionalString(record.raw ?? record.line);
+      if (rawLine) {
+        relationshipNames.push(...this.extractArchimateRelationshipNamesFromBodyLines([rawLine]));
+        return;
+      }
+
+      const relationshipType = this.optionalString(record.type ?? record.relationship ?? record.rel);
+      if (relationshipType) {
+        const normalized = this.normalizeRelationshipLegendName(relationshipType);
+        if (ARCHIMATE_RELATIONSHIP_LEGEND_MAP.has(normalized.toLowerCase())) {
+          relationshipNames.push(normalized);
+        }
+      }
+    });
+
+    return relationshipNames;
+  }
+
+  private deduplicateSorted(values: string[]): string[] {
+    return [...new Set(values.filter((value) => value.trim().length > 0))].sort((left, right) =>
+      left.localeCompare(right),
+    );
+  }
+
+  private macroDisplayName(macro: string): string {
+    const reference = ARCHIMATE_MACRO_REFERENCE_MAP.get(macro.toLowerCase());
+    if (reference?.class) {
+      return reference.class;
+    }
+    if (reference?.name) {
+      return reference.name;
+    }
+    return macro.replace(/_/g, ' ');
+  }
+
+  private macroLayerName(macro: string): string {
+    const reference = ARCHIMATE_MACRO_REFERENCE_MAP.get(macro.toLowerCase());
+    const category = reference?.category?.toLowerCase() ?? '';
+    if (category.includes('strategy')) return 'Strategy';
+    if (category.includes('motiv')) return 'Motivation';
+    if (category.includes('business')) return 'Business';
+    if (category.includes('application')) return 'Application';
+    if (category.includes('technology')) return 'Technology';
+    if (category.includes('physical')) return 'Physical';
+    if (category.includes('implementation')) return 'Implementation';
+    if (category.includes('other')) return 'Other';
+    if (macro === 'Grouping' || macro === 'Group' || macro === 'Boundary') return 'Composite';
+    if (macro.startsWith('Strategy_')) return 'Strategy';
+    if (macro.startsWith('Business_')) return 'Business';
+    if (macro.startsWith('Application_')) return 'Application';
+    if (macro.startsWith('Technology_')) return 'Technology';
+    if (macro.startsWith('Physical_')) return 'Physical';
+    if (macro.startsWith('Motivation_')) return 'Motivation';
+    if (macro.startsWith('Implementation_')) return 'Implementation';
+    if (macro.startsWith('Other_')) return 'Other';
+    return 'Other';
+  }
+
+  private normalizeRelationshipLegendName(value: string): string {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return trimmed;
+    }
+
+    const withoutPrefix = trimmed.replace(/^Rel_/i, '');
+    const normalized = withoutPrefix
+      .replace(/_/g, ' ')
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .trim()
+      .toLowerCase();
+
+    if (!normalized) {
+      return withoutPrefix;
+    }
+
+    return normalized
+      .split(/\s+/)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ');
+  }
+
+  private wrapLegendText(value: string, maxLength: number): string {
+    const normalized = value.replace(/\r\n/g, '\n').trim();
+    if (!normalized) {
+      return normalized;
+    }
+
+    const wrappedLines = normalized.split('\n').flatMap((line) => {
+      const trimmedLine = line.trim();
+      if (trimmedLine.length <= maxLength) {
+        return [trimmedLine];
+      }
+
+      const words = trimmedLine.split(/\s+/);
+      const segments: string[] = [];
+      let current = '';
+
+      words.forEach((word) => {
+        if (!current) {
+          current = word;
+          return;
+        }
+
+        const candidate = `${current} ${word}`;
+        if (candidate.length <= maxLength) {
+          current = candidate;
+          return;
+        }
+
+        segments.push(current);
+        current = word;
+      });
+
+      if (current) {
+        segments.push(current);
+      }
+
+      return segments;
+    });
+
+    return wrappedLines.join('<br>');
+  }
+
+  private formatLegendCell(value: string, maxLength: number): string {
+    return this.wrapLegendText(this.escapePlantUMLString(value), maxLength);
+  }
+
+  private buildLegendRightTable(title: string, headerLabel: string, rows: Array<[string, string]>): string[] {
+    const lines = ['legend right', `|= ${title} |= ${headerLabel} |`];
+    rows.forEach(([left, right]) => {
+      lines.push(`| ${this.formatLegendCell(left, 22)} | ${this.formatLegendCell(right, 28)} |`);
+    });
+    lines.push('end legend');
+    return lines;
+  }
+
+  private buildMixedLegendRightTable(
+    relationshipRows: Array<[string, string]>,
+    elementTypeRows: Array<[string, string]>,
+    layerRows: Array<[string, string]>,
+  ): string[] {
+    const lines = ['legend right', '|= Category |= Value |'];
+    relationshipRows.forEach(([left, right], index) => {
+      lines.push(`| ${index === 0 ? 'Relationships' : ''} | ${this.formatLegendCell(`${left} = ${right}`, 28)} |`);
+    });
+    elementTypeRows.forEach(([left, right], index) => {
+      lines.push(`| ${index === 0 ? 'Element Types' : ''} | ${this.formatLegendCell(`${left} = ${right}`, 28)} |`);
+    });
+    layerRows.forEach(([left, right], index) => {
+      lines.push(`| ${index === 0 ? 'Layers' : ''} | ${this.formatLegendCell(`${left} = ${right}`, 28)} |`);
+    });
+    lines.push('end legend');
+    return lines;
+  }
+
+  private buildArchimateLegendBody(
+    legendType: ArchimateLegendType,
+    bodyLines: string[],
+    structuredArgs?: Record<string, unknown>,
+  ): string[] {
+    const bodyMacros = this.extractArchimateMacrosFromBodyLines(bodyLines);
+    const structuredMacros = structuredArgs ? this.collectArchimateMacrosFromStructuredInput(structuredArgs) : [];
+    const macros = this.deduplicateSorted([...bodyMacros, ...structuredMacros]);
+    const filteredMacros = macros.filter((macro) => macro !== 'Boundary' && macro !== 'Group');
+    const bodyRelationshipNames = this.extractArchimateRelationshipNamesFromBodyLines(bodyLines);
+    const structuredRelationshipNames = structuredArgs
+      ? this.collectArchimateRelationshipNamesFromStructuredInput(structuredArgs)
+      : [];
+    const relationshipRows = this.deduplicateSorted([...bodyRelationshipNames, ...structuredRelationshipNames])
+      .map((name) => {
+        const arrow = ARCHIMATE_RELATIONSHIP_LEGEND_MAP.get(name.toLowerCase());
+        return arrow ? ([name, arrow] as [string, string]) : undefined;
+      })
+      .filter((row): row is [string, string] => Array.isArray(row));
+    const elementTypeRows = filteredMacros.map((macro) => [this.macroDisplayName(macro), macro] as [string, string]);
+    const layerRows = this.deduplicateSorted(filteredMacros.map((macro) => this.macroLayerName(macro))).map((layer) => [
+      layer,
+      layer,
+    ] as [string, string]);
+
+    if (legendType === 'relationship') {
+      return relationshipRows.length > 0
+        ? this.buildLegendRightTable('Relationship', 'Arrow', relationshipRows)
+        : [];
+    }
+    if (legendType === 'element_type') {
+      return elementTypeRows.length > 0 ? this.buildLegendRightTable('Element Type', 'Macro', elementTypeRows) : [];
+    }
+    if (legendType === 'layer') {
+      return layerRows.length > 0 ? this.buildLegendRightTable('Layer', 'Layer', layerRows) : [];
+    }
+    return relationshipRows.length > 0 || elementTypeRows.length > 0 || layerRows.length > 0
+      ? this.buildMixedLegendRightTable(relationshipRows, elementTypeRows, layerRows)
+      : [];
   }
 
   private indentLine(text: string, indent: number): string {
@@ -1473,6 +1967,7 @@ export class PlantUMLMCPServer {
       }
 
       const macro = this.requireString(record.macro ?? record.type, `${path}[${index}].macro`);
+      const normalizedMacro = normalizeArchimateMacroName(macro);
       const label = this.requireString(record.label ?? record.name, `${path}[${index}].label`);
       const detail = this.optionalString(record.description ?? record.detail);
       const aliasCandidate = this.optionalString(record.id ?? record.code ?? record.identifier ?? record.alias);
@@ -1485,7 +1980,7 @@ export class PlantUMLMCPServer {
         args.push(JSON.stringify(detail));
       }
       const extra = this.optionalString(record.extra ?? record.options);
-      const elementLine = `${macro}(${args.join(', ')}${extra ? `, ${extra}` : ''})`;
+      const elementLine = `${normalizedMacro}(${args.join(', ')}${extra ? `, ${extra}` : ''})`;
       lines.push(this.indentLine(elementLine, indent));
 
       const note = this.optionalString(record.note ?? record.annotation);
@@ -1537,11 +2032,12 @@ export class PlantUMLMCPServer {
       const macro =
         this.optionalString(record.macro ?? record.kind ?? record.boundary ?? record.type ?? record.component) ??
         'Boundary';
+      const normalizedMacro = normalizeArchimateMacroName(macro);
       const aliasCandidate = this.optionalString(record.id ?? record.code ?? record.identifier ?? record.alias);
-      const groupId = ensureIdentifier(aliasCandidate, label, `${macro}${index + 1}`);
+      const groupId = ensureIdentifier(aliasCandidate, label, `${normalizedMacro}${index + 1}`);
       this.registerArchimateIdentifiers(identifierMap, groupId, aliasCandidate, label);
 
-      lines.push(this.indentLine(`${macro}(${groupId}, ${JSON.stringify(label)}) {`, indent));
+      lines.push(this.indentLine(`${normalizedMacro}(${groupId}, ${JSON.stringify(label)}) {`, indent));
 
       const nestedElements = this.buildArchimateElementLines(
         record.elements,
@@ -1647,9 +2143,11 @@ export class PlantUMLMCPServer {
     layout?: string;
     theme?: string;
     includeLegend?: boolean;
+    legendType?: ArchimateLegendType;
     useLocalStdlib?: boolean;
     bodyLines: string[];
     extraBody?: string;
+    structuredArgs?: Record<string, unknown>;
   }): string {
     const lines: string[] = ['@startuml'];
 
@@ -1706,8 +2204,7 @@ export class PlantUMLMCPServer {
 
     if (options.includeLegend) {
       lines.push('');
-      lines.push("' Relationship reference");
-      lines.push(...ARCHIMATE_RELATIONSHIP_LEGEND_BODY.split('\n'));
+      lines.push(...this.buildArchimateLegendBody(options.legendType ?? 'relationship', options.bodyLines, options.structuredArgs));
     }
 
     lines.push('@enduml');
@@ -1809,8 +2306,7 @@ export class PlantUMLMCPServer {
         return { tools: [] };
       }
 
-      return {
-        tools: [
+      const tools: Array<Record<string, unknown>> = [
           {
             name: 'generate_plantuml_diagram',
             title: 'Generate PlantUML Diagram',
@@ -1922,15 +2418,6 @@ export class PlantUMLMCPServer {
                 image_embedded: { type: 'boolean' },
                 image_mime_type: { type: 'string' },
                 image_size_bytes: { type: 'integer' },
-                remote_plantuml_url: { type: 'string', format: 'uri' },
-                shared_storage: {
-                  type: 'object',
-                  properties: {
-                    filename: { type: 'string' },
-                    file_path: { type: 'string' },
-                    public_url: { type: 'string', format: 'uri' },
-                  },
-                },
                 error_message: { type: 'string' },
               },
               required: ['success'],
@@ -1955,8 +2442,6 @@ export class PlantUMLMCPServer {
               properties: {
                 success: { type: 'boolean' },
                 encoded: { type: 'string' },
-                svg_url: { type: 'string', format: 'uri' },
-                png_url: { type: 'string', format: 'uri' },
                 error_message: { type: 'string' },
               },
               required: ['success'],
@@ -2021,6 +2506,11 @@ export class PlantUMLMCPServer {
                 include_relationship_legend: {
                   type: 'boolean',
                   description: 'Set to true to append the official ArchiMate relationship legend block.',
+                },
+                legend_type: {
+                  type: 'string',
+                  enum: ['relationship', 'element_type', 'layer', 'mixed'],
+                  description: 'Legend variant to render when include_relationship_legend is true.',
                 },
                 include_elements_reference: {
                   type: 'boolean',
@@ -2138,15 +2628,6 @@ export class PlantUMLMCPServer {
                 image_embedded: { type: 'boolean' },
                 image_mime_type: { type: 'string' },
                 image_size_bytes: { type: 'integer' },
-                remote_plantuml_url: { type: 'string', format: 'uri' },
-                shared_storage: {
-                  type: 'object',
-                  properties: {
-                    filename: { type: 'string' },
-                    file_path: { type: 'string' },
-                    public_url: { type: 'string', format: 'uri' },
-                  },
-                },
                 archimate_source: { type: 'string' },
                 error_message: { type: 'string' },
               },
@@ -2225,23 +2706,19 @@ export class PlantUMLMCPServer {
                 image_embedded: { type: 'boolean' },
                 image_mime_type: { type: 'string' },
                 image_size_bytes: { type: 'integer' },
-                remote_plantuml_url: { type: 'string', format: 'uri' },
-                shared_storage: {
-                  type: 'object',
-                  properties: {
-                    filename: { type: 'string' },
-                    file_path: { type: 'string' },
-                    public_url: { type: 'string', format: 'uri' },
-                  },
-                },
                 business_scenario_source: { type: 'string' },
                 error_message: { type: 'string' },
               },
               required: ['success'],
             },
           },
-        ],
-      };
+        ];
+
+      if (EXPOSE_PROMPT_AS_TOOL) {
+        tools.push(...PROMPTS.map((prompt) => promptToToolDefinition(prompt)));
+      }
+
+      return { tools };
     });
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -2257,27 +2734,45 @@ export class PlantUMLMCPServer {
       }
 
       let response;
-      switch (name) {
-        case 'generate_plantuml_diagram':
-          response = await this.generateDiagram(args);
-          break;
-        case 'generate_capability_landscape':
-          response = await this.generateCapabilityLandscape(args);
-          break;
-        case 'generate_archimate_diagram':
-          response = await this.generateArchimateDiagram(args);
-          break;
-        case 'generate_business_scenario':
-          response = await this.generateBusinessScenario(args);
-          break;
-        case 'encode_plantuml':
-          response = await this.encodePlantuml(args);
-          break;
-        case 'decode_plantuml':
-          response = await this.decodePlantuml(args);
-          break;
-        default:
-          throw new Error(`Unknown tool: ${name}`);
+      const promptAsTool = EXPOSE_PROMPT_AS_TOOL ? PROMPTS.find((candidate) => candidate.name === name) : undefined;
+      if (promptAsTool) {
+        const text = await renderPromptText(promptAsTool, args as PromptTemplateArgs);
+        response = {
+          structuredContent: {
+            success: true,
+            prompt_name: promptAsTool.name,
+            content: text,
+          },
+          content: [
+            {
+              type: 'text',
+              text,
+            },
+          ],
+        };
+      } else {
+        switch (name) {
+          case 'generate_plantuml_diagram':
+            response = await this.generateDiagram(args);
+            break;
+          case 'generate_capability_landscape':
+            response = await this.generateCapabilityLandscape(args);
+            break;
+          case 'generate_archimate_diagram':
+            response = await this.generateArchimateDiagram(args);
+            break;
+          case 'generate_business_scenario':
+            response = await this.generateBusinessScenario(args);
+            break;
+          case 'encode_plantuml':
+            response = await this.encodePlantuml(args);
+            break;
+          case 'decode_plantuml':
+            response = await this.decodePlantuml(args);
+            break;
+          default:
+            throw new Error(`Unknown tool: ${name}`);
+        }
       }
 
       this.log(
@@ -2299,7 +2794,7 @@ export class PlantUMLMCPServer {
       }
 
       return {
-        prompts: PROMPTS.map(({ template, ...prompt }) => prompt),
+        prompts: PROMPTS.map(({ template, documentationFile, ...prompt }) => prompt),
       };
     });
 
@@ -2313,7 +2808,7 @@ export class PlantUMLMCPServer {
       }
 
       const args = request.params.arguments ?? {};
-      const text = prompt.template(args);
+      const text = await renderPromptText(prompt, args);
 
       return {
         description: prompt.description,
@@ -2613,18 +3108,14 @@ export class PlantUMLMCPServer {
 
       const imageSizeBytes = inlineImageBuffer?.length ?? 0;
       const imageEmbedded = Boolean(inlineImageBuffer && imageSizeBytes <= MAX_INLINE_IMAGE_BYTES);
-      const storedDiagram = await persistDiagramToSharedStorage(diagramBuffer, format);
-      if (storedDiagram) {
-        this.log(
-          'debug',
-          storedDiagram.filePath
-            ? `Diagram persisted via ${storedDiagram.storageBackend} at ${storedDiagram.filePath}`
-            : `Diagram persisted via ${storedDiagram.storageBackend} as ${storedDiagram.fileName}`,
-        );
-      } else {
-        this.log('debug', 'Shared storage disabled; using remote PlantUML URL only.');
+      const storedDiagram = await persistDiagramToObFile(diagramBuffer, format);
+      if (!storedDiagram.publicUrl) {
+        throw new Error('Diagram generation succeeded but no public ob-file URL could be produced.');
       }
-      const publicDiagramUrl = storedDiagram?.publicUrl ?? remoteDiagramUrl;
+
+      this.log('debug', `Diagram persisted via ${storedDiagram.storageBackend} as ${storedDiagram.fileName}`);
+
+      const publicDiagramUrl = storedDiagram.publicUrl;
       const markdownEmbed = `![PlantUML Diagram](${publicDiagramUrl})`;
 
       const structuredContent = {
@@ -2633,37 +3124,16 @@ export class PlantUMLMCPServer {
         diagram_url: publicDiagramUrl,
         markdown_embed: markdownEmbed,
         encoded_diagram: encoded,
-        remote_plantuml_url: remoteDiagramUrl,
         image_embedded: imageEmbedded,
         image_mime_type: imageMimeType,
         image_size_bytes: imageSizeBytes,
       } as Record<string, unknown>;
 
-      if (storedDiagram) {
-        structuredContent.shared_storage = {
-          filename: storedDiagram.fileName,
-          file_path: storedDiagram.filePath,
-          public_url: storedDiagram.publicUrl,
-          backend: storedDiagram.storageBackend,
-        };
-      }
-
       const contentParts = [
         'Successfully generated PlantUML diagram!',
         `**Public URL:**\n\`\`\`\n${publicDiagramUrl}\n\`\`\``,
-        `**PlantUML server URL:**\n\`\`\`\n${remoteDiagramUrl}\n\`\`\``,
         `**Markdown embed:**\n\`\`\`markdown\n${markdownEmbed}\n\`\`\``,
       ];
-
-      if (storedDiagram) {
-        contentParts.splice(
-          2,
-          0,
-          storedDiagram.filePath
-            ? `Stored via \`${storedDiagram.storageBackend}\`: \`${storedDiagram.fileName}\` (stored under ${GENERATED_FILES_DIR}).`
-            : `Stored via \`${storedDiagram.storageBackend}\`: \`${storedDiagram.fileName}\`.`,
-        );
-      }
 
       contentParts.push(
         imageEmbedded
@@ -2690,7 +3160,6 @@ export class PlantUMLMCPServer {
           mimeType: imageMimeType,
         });
       }
-
       return {
         structuredContent,
         content,
@@ -2717,6 +3186,7 @@ export class PlantUMLMCPServer {
   private async generateArchimateDiagram(args: Record<string, unknown>) {
     const format = args.format === 'png' ? 'png' : 'svg';
     const includeLegend = args.include_relationship_legend === true;
+    const legendType = this.normalizeArchimateLegendType(args.legend_type) ?? 'relationship';
     const includeElementsReference = args.include_elements_reference === true;
     const title = this.optionalString(args.title ?? args.diagram_title);
     const layout = this.optionalString(args.layout ?? args.orientation);
@@ -2727,8 +3197,11 @@ export class PlantUMLMCPServer {
 
     let plantumlCode: string;
 
-    if (overrideBody && overrideBody.trim().length > 0) {
-      const trimmedBody = overrideBody.trim();
+    const hasOverrideBody = Boolean(overrideBody && overrideBody.trim().length > 0);
+    const trimmedOverrideBody = hasOverrideBody ? overrideBody!.trim() : undefined;
+
+    if (hasOverrideBody) {
+      const trimmedBody = rewriteArchimateBody(trimmedOverrideBody!);
       if (trimmedBody.startsWith('@startuml')) {
         plantumlCode = trimmedBody;
       } else {
@@ -2737,9 +3210,11 @@ export class PlantUMLMCPServer {
           layout,
           theme,
           includeLegend,
+          legendType,
           useLocalStdlib,
           bodyLines: trimmedBody.split('\n'),
           extraBody: extraBody ?? undefined,
+          structuredArgs: args,
         });
       }
     } else if (includeElementsReference) {
@@ -2792,8 +3267,10 @@ export class PlantUMLMCPServer {
           layout,
           theme,
           includeLegend,
+          legendType,
           useLocalStdlib,
           bodyLines,
+          structuredArgs: args,
         });
       }
     }
@@ -2802,6 +3279,40 @@ export class PlantUMLMCPServer {
       plantuml_code: plantumlCode,
       format,
     });
+
+    // If the caller provided raw body and validation failed, retry once with compatibility rewrites.
+    const structured = (result as { structuredContent?: unknown }).structuredContent;
+    if (
+      hasOverrideBody &&
+      structured &&
+      typeof structured === 'object' &&
+      (structured as Record<string, unknown>).validation_failed === true
+    ) {
+      const compatBody = rewriteArchimateBodyForCompatibility(trimmedOverrideBody!);
+      if (compatBody !== rewriteArchimateBody(trimmedOverrideBody!)) {
+        const compatCode = compatBody.startsWith('@startuml')
+            ? compatBody
+            : this.buildArchimateDocument({
+              title,
+              layout,
+              theme,
+              includeLegend,
+              legendType,
+              useLocalStdlib,
+              bodyLines: compatBody.split('\n'),
+              extraBody: extraBody ?? undefined,
+              structuredArgs: args,
+            });
+        const retry = await this.generateDiagram({
+          plantuml_code: compatCode,
+          format,
+        });
+        if (retry.structuredContent && typeof retry.structuredContent === 'object') {
+          (retry.structuredContent as Record<string, unknown>).archimate_source = compatCode;
+        }
+        return retry;
+      }
+    }
 
     if (result.structuredContent && typeof result.structuredContent === 'object') {
       (result.structuredContent as Record<string, unknown>).archimate_source = plantumlCode;
@@ -3197,13 +3708,11 @@ export class PlantUMLMCPServer {
         structuredContent: {
           success: true,
           encoded,
-          svg_url: `${PLANTUML_SERVER_URL}/svg/${encoded}`,
-          png_url: `${PLANTUML_SERVER_URL}/png/${encoded}`,
         },
         content: [
           {
             type: 'text',
-            text: `**Encoded PlantUML:**\n\`\`\`\n${encoded}\n\`\`\`\n\n**Full SVG URL:**\n\`\`\`\n${PLANTUML_SERVER_URL}/svg/${encoded}\n\`\`\`\n\n**Full PNG URL:**\n\`\`\`\n${PLANTUML_SERVER_URL}/png/${encoded}\n\`\`\``,
+            text: `**Encoded PlantUML:**\n\`\`\`\n${encoded}\n\`\`\``,
           },
         ],
       };
