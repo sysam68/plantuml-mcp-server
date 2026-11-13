@@ -73,7 +73,12 @@ export class ResourceAuthorization {
             const { payload } = await jwtVerify(match[1], this.jwks, {
                 issuer: this.issuer, audience: this.audience, algorithms: ['RS256', 'ES256'], requiredClaims: ['exp', 'jti'],
             });
-            if (typeof payload.jti !== 'string' || !payload.jti.trim() || payload.aud !== this.audience)
+            const audiences = typeof payload.aud === 'string'
+                ? [payload.aud]
+                : Array.isArray(payload.aud) && payload.aud.every((audience) => typeof audience === 'string')
+                    ? payload.aud
+                    : [];
+            if (typeof payload.jti !== 'string' || !payload.jti.trim() || !audiences.includes(this.audience))
                 return { status: 401 };
             const client = payload.client_id ?? payload.azp;
             const scopes = typeof payload.scope === 'string' ? payload.scope.split(/\s+/) : [];

@@ -60,6 +60,7 @@ test('OIDC protects every MCP request and binds sessions to their subject', asyn
       .setAudience(options.audience ?? audience).setJti('test-id').setExpirationTime(options.expires ?? '5m').sign(privateKey);
   };
   const valid = await token();
+  const validAudienceArray = await token({}, { audience: [audience, 'https://secondary.example.test/resource'] });
   const missingJti = await new SignJWT({ sub: 'human-a', client_id: 'mcp-dcs-plantuml', groups: ['users'], scope: 'plantuml:render' })
     .setProtectedHeader({ alg: 'RS256', kid: 'test-key' }).setIssuer(issuer).setAudience(audience).setExpirationTime('5m').sign(privateKey);
   const otherKeys = await generateKeyPair('RS256');
@@ -74,11 +75,12 @@ test('OIDC protects every MCP request and binds sessions to their subject', asyn
   const metadata = await fetch(`${base}/.well-known/oauth-protected-resource/plantuml/api/mcp`);
   assert.equal(metadata.status, 200);
   assert.deepEqual(await metadata.json(), { resource: audience, authorization_servers: [issuer], scopes_supported: ['plantuml:render'], bearer_methods_supported: ['header'] });
-  for (const invalid of [undefined, 'not-a-jwt', missingJti, wrongSignature, await token({}, { expires: '-1s' }), await token({}, { issuer: 'https://wrong.test' }), await token({}, { audience: 'wrong' })]) {
+  for (const invalid of [undefined, 'not-a-jwt', missingJti, wrongSignature, await token({}, { expires: '-1s' }), await token({}, { issuer: 'https://wrong.test' }), await token({}, { audience: 'wrong' }), await token({}, { audience: ['wrong', 'also-wrong'] })]) {
     const response = await rpc(invalid, initialize);
     assert.equal(response.status, 401);
     assert.match(response.headers.get('www-authenticate'), /resource_metadata=/);
   }
+  assert.equal((await rpc(validAudienceArray, initialize)).status, 200);
   for (const claims of [{ client_id: 'wrong' }, { scope: 'other' }, { sub: '' }, { groups: [] }, { groups: 'users' }]) {
     assert.equal((await rpc(await token(claims), initialize)).status, 403);
   }
