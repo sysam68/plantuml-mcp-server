@@ -4,6 +4,6 @@
   "url": "http://plantuml-mcp:8765/sse",
   "messagesUrl": "http://plantuml-mcp:8765/messages",
   "headers": {
-    "Authorization": "Bearer 1234"
+    "Authorization": "Bearer ${PLANTUML_ACCESS_TOKEN}"
   }
 }

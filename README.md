@@ -9,7 +9,7 @@ All capabilities are exposed over **HTTP**, **Server-Sent Events (SSE)**, and **
 - 🧰 Tools: `generate_plantuml_diagram`, `generate_capability_landscape`, `generate_business_scenario`, `encode_plantuml`, `decode_plantuml`
 - 🧾 Prompts: `plantuml_error_handling`, `archimate_macro_reference`, `capability_landscape_input_format`, `archimate_diagram_input_format`, `business_scenario_input_format`
 - 📚 Static resources: `resource://plantuml/server-guide`, `resource://plantuml/archimate-mapping`
-- 🔒 Optional Bearer authentication via `MCP_API_KEY`
+- 🔒 OIDC/JWKS resource-server authorization for HTTP and SSE
 - ☁️ Required `ob-file` export via signed download URLs (`OB_FILE_API_BASE_URL`)
 - 🔐 Optional OIDC client-credentials flow for `ob-file` (`OB_FILE_OIDC_*`)
 
@@ -34,11 +34,15 @@ Use `npx plantuml-mcp-server` or `node dist/plantuml-mcp-server.js` once built.
 | ---- | ----------- | ------------ |
 | **HTTP** (default) | Direct REST-style integration, reverse proxies, health checks | `MCP_TRANSPORT=http node dist/plantuml-mcp-server.js` |
 | **SSE** | Claude Desktop / Flowise over the network with push updates | `MCP_TRANSPORT=sse node dist/plantuml-mcp-server.js` |
-| **STDIO** | Local CLI tools (npx, Claude Code CLI, Flowise managed process) | `MCP_TRANSPORT=stdio npx plantuml-mcp-server` |
+| **STDIO** | Local CLI tools | `MCP_AUTH_MODE=none MCP_TRANSPORT=stdio npx plantuml-mcp-server` |
 
 ### HTTP transport
 ```bash
 MCP_TRANSPORT=http \
+MCP_AUTH_MODE=oidc \
+OIDC_ISSUER_URL=https://your-issuer.example \
+OIDC_AUDIENCE=https://mcp-servers.shared.mpn/plantuml/api/mcp \
+MCP_RESOURCE_URL=https://mcp-servers.shared.mpn/plantuml/api/mcp \
 MCP_HOST=0.0.0.0 \
 MCP_PORT=8765 \
 MCP_HTTP_PATH=/mcp \
@@ -52,6 +56,10 @@ node dist/plantuml-mcp-server.js
 ### SSE transport
 ```bash
 MCP_TRANSPORT=sse \
+MCP_AUTH_MODE=oidc \
+OIDC_ISSUER_URL=https://your-issuer.example \
+OIDC_AUDIENCE=https://mcp-servers.shared.mpn/plantuml/api/mcp \
+MCP_RESOURCE_URL=https://mcp-servers.shared.mpn/plantuml/api/mcp \
 MCP_HOST=0.0.0.0 \
 MCP_PORT=8765 \
 MCP_SSE_PATH=/sse \
@@ -63,9 +71,9 @@ node dist/plantuml-mcp-server.js
 
 ### STDIO transport
 ```bash
-MCP_TRANSPORT=stdio npx plantuml-mcp-server
+MCP_AUTH_MODE=none MCP_TRANSPORT=stdio npx plantuml-mcp-server
 # or run the compiled file directly
-MCP_TRANSPORT=stdio node dist/plantuml-mcp-server.js
+MCP_AUTH_MODE=none MCP_TRANSPORT=stdio node dist/plantuml-mcp-server.js
 ```
 - Ideal for local experiments, `mcp` CLI, or Flowise nodes that spawn the binary.
 - Example setups live in [`client_config_stdio.json`](client_config_stdio.json).
@@ -77,7 +85,7 @@ MCP_TRANSPORT=stdio node dist/plantuml-mcp-server.js
 - [`client_config_sse.json`](client_config_sse.json) – SSE + dedicated `messagesUrl`
 - [`client_config_stdio.json`](client_config_stdio.json) – STDIO examples for `npx` and Flowise-managed processes
 
-Drop these files into your MCP-aware client or copy the snippets as needed. Update hostnames, ports, and API keys to match your deployment.
+Drop these files into your MCP-aware client or copy the snippets as needed. Configure OAuth and hostnames for your deployment.
 
 ---
 
@@ -93,15 +101,19 @@ Drop these files into your MCP-aware client or copy the snippets as needed. Upda
 | `MCP_HTTP_ENABLE_JSON_RESPONSES` | `false` | Return JSON body when true (for debugging) |
 | `MCP_SSE_PATH` | `/sse` | SSE stream endpoint |
 | `MCP_SSE_MESSAGES_PATH` | `/messages` | Message ingestion endpoint |
-| `MCP_API_KEY` | unset | Enables Bearer auth when provided |
+| `MCP_AUTH_MODE` | `oidc` | `oidc` for network servers; explicit `none` is restricted to loopback or stdio |
+| `OIDC_ISSUER_URL` | required | Exact HTTPS issuer used for discovery and token validation |
+| `OIDC_AUDIENCE` | required | Must be `https://mcp-servers.shared.mpn/plantuml/api/mcp` |
+| `MCP_RESOURCE_URL` | required | Canonical HTTPS resource URL advertised in RFC 9728 metadata |
+| `MCP_OIDC_ALLOW_INSECURE_LOOPBACK` | unset | Test-only: permit HTTP discovery/resource URLs on loopback |
 | `OB_FILE_API_BASE_URL` | unset | `ob-file` management API base URL (for example `http://ob-file:8000`) |
 | `OB_FILE_API_TOKEN` | unset | Bearer token used to call the `ob-file` management API |
 | `OB_FILE_OIDC_DISCOVERY_URL` | unset | Authelia OIDC discovery URL used to obtain a service access token |
 | `OB_FILE_OIDC_TOKEN_ENDPOINT` | unset | Optional direct token endpoint override (useful for internal service-to-service calls) |
 | `OB_FILE_OIDC_CLIENT_ID` | unset | OIDC client identifier used by `mcp-plantuml` |
 | `OB_FILE_OIDC_CLIENT_SECRET` | unset | OIDC client secret used by `mcp-plantuml` |
-| `OB_FILE_OIDC_SCOPE` | `groups` | Scope requested during the client-credentials token request |
-| `OB_FILE_OIDC_AUDIENCE` | `ob-file` | Audience requested during the client-credentials token request |
+| `OB_FILE_OIDC_SCOPE` | `obfile:write` | Scope requested for the machine upload/public-url flow |
+| `OB_FILE_OIDC_AUDIENCE` | `https://mcp-servers.shared.mpn/obfile/api/mcp` | OBFile audience for the separate machine token |
 | `OB_FILE_OIDC_FORWARDED_PROTO` | unset | Optional `X-Forwarded-Proto` header for internal Authelia calls |
 | `OB_FILE_OIDC_FORWARDED_HOST` | unset | Optional `X-Forwarded-Host` header for internal Authelia calls |
 | `MCP_MAX_INLINE_IMAGE_BYTES` | `2097152` | Maximum rendered image size embedded directly in a tool result |
@@ -109,6 +121,10 @@ Drop these files into your MCP-aware client or copy the snippets as needed. Upda
 | `PLANTUML_MCP_SKIP_AUTO_START` | unset | When `true`, skips auto-start so scripts can import the server class without launching transports |
 
 `OB_FILE_API_BASE_URL` is mandatory for all diagram generation tools. Rendered diagrams are uploaded through `ob-file` and the MCP response returns only the public `diagram_url` produced by `ob-file`. If `OB_FILE_OIDC_DISCOVERY_URL`, `OB_FILE_OIDC_CLIENT_ID`, and `OB_FILE_OIDC_CLIENT_SECRET` are configured, the server obtains and caches an access token automatically via OAuth 2.0 client credentials. There is no fallback to shared-volume URLs or direct PlantUML URLs.
+
+OIDC requires a signed access token with exact issuer and PlantUML audience, expiration, nonempty `jti` and human `sub`, client `mcp-dcs-plantuml`, group `users`, and scope `plantuml:render`. Each request is checked independently and each session is bound to its subject and client. Discovery must advertise the configured issuer and a same-origin HTTPS JWKS endpoint. RFC 9728 metadata is served under `/.well-known/oauth-protected-resource` followed by the canonical resource path. The OAuth client uses authorization code with PKCE and the `standard` claims policy configured by OB-SEC; its Codex and Claude callbacks are registered there.
+
+For isolated local tests, set `MCP_AUTH_MODE=none MCP_HOST=127.0.0.1`; this bypass is rejected on non-loopback network binds. STDIO also requires explicit `MCP_AUTH_MODE=none`. Never expose this mode through a proxy. `MCP_API_KEY` no longer authenticates incoming requests. In OIDC mode, OBFile calls require the separate `mcp-plantuml` client-credentials identity, the OBFile audience and `obfile:write`; the incoming human token is never forwarded. The legacy `OB_FILE_API_TOKEN` fallback is available only in local mode.
 
 ---
 
@@ -128,14 +144,15 @@ Drop these files into your MCP-aware client or copy the snippets as needed. Upda
 The provided [Dockerfile](Dockerfile) builds the TypeScript sources and produces a minimal runtime image:
 ```bash
 docker build -t plantuml-mcp-server .
-docker run --rm -e MCP_TRANSPORT=http -p 8765:8765 plantuml-mcp-server
+docker run --rm -e MCP_TRANSPORT=http --env-file /path/to/oidc.env -p 8765:3000 plantuml-mcp-server
 ```
-Override environment variables (`PLANTUML_SERVER_URL`, `MCP_API_KEY`, etc.) as needed.
+Provide the OIDC settings above through the environment file.
 
 ---
 
 ## Testing & Tooling
 - `npm run build` – compile TypeScript
+- `npm run test:auth` – signed-token and Streamable HTTP authorization contract tests with local fixtures
 - `npm start` – run using the default HTTP transport
 - `npm run start:sse` / `npm run start:stdio` – convenience scripts
 - `npm run test:business-scenario` – snapshot test that converts `test_files/generate_sequence_diagram/payload.json` into PlantUML and compares it to `expected.puml`
@@ -145,7 +162,7 @@ Override environment variables (`PLANTUML_SERVER_URL`, `MCP_API_KEY`, etc.) as n
 
 ## Need Help?
 - Verify connectivity with `curl http://<host>:<port>/healthz`
-- Confirm auth headers match `MCP_API_KEY` (Bearer token) if enabled
+- Check the issuer, audience, client, group, scope, and protected-resource metadata when a bearer token is rejected
 - Use the MCP Inspector or Flowise node logs to trace JSON-RPC payloads
 
 The server ships with everything required to operate over HTTP, SSE, and STDIO. Plug in the transport that matches your environment and start generating diagrams!

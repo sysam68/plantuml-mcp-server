@@ -12,6 +12,7 @@ import { CallToolRequestSchema, CompleteRequestSchema, GetPromptRequestSchema, L
 import * as contentType from 'content-type';
 import plantumlEncoder from 'plantuml-encoder';
 import getRawBody from 'raw-body';
+import { ResourceAuthorization } from './auth.js';
 const LOG_LEVELS = ['emergency', 'alert', 'critical', 'error', 'warning', 'notice', 'info', 'debug'];
 const LOG_LEVEL_ALIASES = {
     warn: 'warning',
@@ -101,15 +102,15 @@ const MCP_HTTP_PATH = normalizePath(process.env.MCP_HTTP_PATH || '/mcp');
 const MCP_HTTP_ENABLE_JSON_RESPONSES = parseBoolean(process.env.MCP_HTTP_ENABLE_JSON_RESPONSES, false);
 const MCP_SSE_PATH = normalizePath(process.env.MCP_SSE_PATH || '/sse');
 const MCP_SSE_MESSAGES_PATH = normalizePath(process.env.MCP_SSE_MESSAGES_PATH || '/messages');
-const MCP_API_KEY = process.env.MCP_API_KEY;
+const MCP_AUTH_MODE = process.env.MCP_AUTH_MODE || 'oidc';
 const OB_FILE_API_BASE_URL = normalizeBaseUrl(process.env.OB_FILE_API_BASE_URL || '');
 const OB_FILE_API_TOKEN = process.env.OB_FILE_API_TOKEN;
 const OB_FILE_OIDC_DISCOVERY_URL = process.env.OB_FILE_OIDC_DISCOVERY_URL || '';
 const OB_FILE_OIDC_TOKEN_ENDPOINT = process.env.OB_FILE_OIDC_TOKEN_ENDPOINT || '';
 const OB_FILE_OIDC_CLIENT_ID = process.env.OB_FILE_OIDC_CLIENT_ID || '';
 const OB_FILE_OIDC_CLIENT_SECRET = process.env.OB_FILE_OIDC_CLIENT_SECRET || '';
-const OB_FILE_OIDC_SCOPE = process.env.OB_FILE_OIDC_SCOPE || 'groups';
-const OB_FILE_OIDC_AUDIENCE = process.env.OB_FILE_OIDC_AUDIENCE || 'ob-file';
+const OB_FILE_OIDC_SCOPE = process.env.OB_FILE_OIDC_SCOPE || 'obfile:write';
+const OB_FILE_OIDC_AUDIENCE = process.env.OB_FILE_OIDC_AUDIENCE || 'https://mcp-servers.shared.mpn/obfile/api/mcp';
 const OB_FILE_OIDC_FORWARDED_PROTO = process.env.OB_FILE_OIDC_FORWARDED_PROTO || '';
 const OB_FILE_OIDC_FORWARDED_HOST = process.env.OB_FILE_OIDC_FORWARDED_HOST || '';
 const EXPOSE_PROMPT_AS_TOOL = parseBoolean(process.env.EXPOSE_PROMPT_AS_TOOL, false);
@@ -121,14 +122,6 @@ function getDiagramMimeType(format) {
 }
 let obFileOidcMetadataCache;
 let obFileAccessTokenCache;
-function stringifyForLog(value) {
-    try {
-        return JSON.stringify(value, null, 2);
-    }
-    catch {
-        return '[unserializable]';
-    }
-}
 function hasObFileOidcClientCredentials() {
     return Boolean((OB_FILE_OIDC_DISCOVERY_URL || OB_FILE_OIDC_TOKEN_ENDPOINT) &&
         OB_FILE_OIDC_CLIENT_ID &&
@@ -171,6 +164,10 @@ function requireObFileTokenEndpoint(metadata) {
     return metadata.token_endpoint;
 }
 async function getObFileApiAccessToken() {
+    if (MCP_AUTH_MODE === 'oidc' && (!hasObFileOidcClientCredentials() || OB_FILE_OIDC_CLIENT_ID !== 'mcp-plantuml' ||
+        OB_FILE_OIDC_AUDIENCE !== 'https://mcp-servers.shared.mpn/obfile/api/mcp' || OB_FILE_OIDC_SCOPE !== 'obfile:write')) {
+        throw new Error('OBFile requires the configured mcp-plantuml machine client, OBFile audience and obfile:write scope');
+    }
     if (hasObFileOidcClientCredentials()) {
         const now = Date.now();
         if (obFileAccessTokenCache && obFileAccessTokenCache.expiresAt - now > 60_000) {
@@ -212,12 +209,6 @@ async function getObFileApiAccessToken() {
     return undefined;
 }
 logToConsole('info', `Log level set to ${requestedLogLevel}`);
-if (MCP_API_KEY) {
-    logToConsole('info', 'MCP API key authentication enabled.');
-}
-else {
-    logToConsole('warning', 'MCP_API_KEY not set. Server will accept unauthenticated requests.');
-}
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ARCHIMATE_SAMPLE_CANDIDATES = [
     path.resolve(MODULE_DIR, '../../../plugins/samples/Archimate-Elements.wsd'),
@@ -895,29 +886,6 @@ function renderArchimateMappingMarkdown(entries) {
     });
     return parts.join('\n');
 }
-function isValidAuthorizationHeader(header) {
-    if (!MCP_API_KEY) {
-        return true;
-    }
-    return header === `Bearer ${MCP_API_KEY}`;
-}
-function unauthorizedResponse() {
-    return {
-        content: [{ type: 'text', text: 'Unauthorized: Invalid or missing authorization header.' }],
-        isError: true,
-    };
-}
-function extractAuthorizationHeader(request) {
-    if (!request || typeof request !== 'object') {
-        return undefined;
-    }
-    const headers = request.headers;
-    if (!headers || typeof headers !== 'object') {
-        return undefined;
-    }
-    const authorization = headers.authorization;
-    return typeof authorization === 'string' ? authorization : undefined;
-}
 function getHeaderValue(value) {
     if (!value) {
         return undefined;
@@ -926,9 +894,6 @@ function getHeaderValue(value) {
         return value[value.length - 1];
     }
     return value;
-}
-function getAuthorizationHeader(req) {
-    return getHeaderValue(req.headers.authorization);
 }
 function getSessionIdHeader(req) {
     return getHeaderValue(req.headers['mcp-session-id']);
@@ -1179,7 +1144,6 @@ function formatActivationSuffix(state) {
 }
 export class PlantUMLMCPServer {
     server;
-    defaultAuthorization;
     clientLogLevel;
     supportsCompletions = false;
     constructor() {
@@ -1826,18 +1790,6 @@ export class PlantUMLMCPServer {
         logToConsole(level, message, error);
         void this.forwardLog(level, message, error, data);
     }
-    setDefaultAuthorization(authHeader) {
-        this.defaultAuthorization = authHeader;
-    }
-    assertAuthorizedForRead() {
-        if (!MCP_API_KEY) {
-            return;
-        }
-        if (!this.defaultAuthorization) {
-            this.log('warning', 'Unauthorized read request blocked due to missing authorization header.');
-            throw new Error('Unauthorized: Invalid or missing authorization header.');
-        }
-    }
     async connect(transport) {
         await this.server.connect(transport);
     }
@@ -1853,7 +1805,6 @@ export class PlantUMLMCPServer {
     setupToolHandlers() {
         this.server.setRequestHandler(ListToolsRequestSchema, async (request) => {
             this.log('debug', 'ListTools request received');
-            this.assertAuthorizedForRead();
             if (request.params?.cursor) {
                 this.log('debug', `Ignoring unsupported tools cursor "${request.params.cursor}" (no additional pages).`);
                 return { tools: [] };
@@ -2267,12 +2218,6 @@ export class PlantUMLMCPServer {
             const { name } = request.params;
             const args = (request.params.arguments ?? {});
             this.log('debug', `CallTool request received: ${name}`);
-            this.log('debug', `CallTool raw request payload:\n${stringifyForLog(request)}`);
-            const authorization = extractAuthorizationHeader(request) ?? this.defaultAuthorization;
-            if (!isValidAuthorizationHeader(authorization)) {
-                this.log('warning', `Unauthorized CallTool request blocked for tool ${name ?? '<unknown>'}.`);
-                return unauthorizedResponse();
-            }
             let response;
             const promptAsTool = EXPOSE_PROMPT_AS_TOOL ? PROMPTS.find((candidate) => candidate.name === name) : undefined;
             if (promptAsTool) {
@@ -2315,14 +2260,12 @@ export class PlantUMLMCPServer {
                         throw new Error(`Unknown tool: ${name}`);
                 }
             }
-            this.log('debug', `CallTool response for ${name}:\n${stringifyForLog(response?.structuredContent ?? response)}`);
             return response;
         });
     }
     setupPromptHandlers() {
         this.server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
             this.log('debug', 'ListPrompts request received');
-            this.assertAuthorizedForRead();
             if (request.params?.cursor) {
                 this.log('debug', `Ignoring unsupported prompts cursor "${request.params.cursor}" (no additional pages).`);
                 return { prompts: [] };
@@ -2333,7 +2276,6 @@ export class PlantUMLMCPServer {
         });
         this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
             this.log('debug', `GetPrompt request for ${request.params.name}`);
-            this.assertAuthorizedForRead();
             const prompt = PROMPTS.find((candidate) => candidate.name === request.params.name);
             if (!prompt) {
                 throw new Error(`Unknown prompt: ${request.params.name}`);
@@ -2357,7 +2299,6 @@ export class PlantUMLMCPServer {
     setupResourceHandlers() {
         this.server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
             this.log('debug', 'ListResources request received');
-            this.assertAuthorizedForRead();
             if (request.params?.cursor) {
                 this.log('debug', `Ignoring unsupported resources cursor "${request.params.cursor}" (no additional pages).`);
                 return { resources: [] };
@@ -2368,7 +2309,6 @@ export class PlantUMLMCPServer {
         });
         this.server.setRequestHandler(ListResourceTemplatesRequestSchema, async (request) => {
             this.log('debug', 'ListResourceTemplates request received');
-            this.assertAuthorizedForRead();
             if (request.params?.cursor) {
                 this.log('debug', `Ignoring unsupported resource template cursor "${request.params.cursor}" (no additional pages).`);
             }
@@ -2377,7 +2317,6 @@ export class PlantUMLMCPServer {
         this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
             const { uri } = request.params;
             this.log('debug', `ReadResource request for ${uri}`);
-            this.assertAuthorizedForRead();
             const resource = STATIC_RESOURCES.find((entry) => entry.uri === uri);
             if (!resource) {
                 this.log('warning', `Resource not found: ${uri}`);
@@ -3120,15 +3059,8 @@ export class PlantUMLMCPServer {
         }
     }
 }
-async function startStreamableHttpServer() {
+async function startStreamableHttpServer(auth) {
     const sessions = new Map();
-    const rejectUnauthorized = (res, reason) => {
-        if (res.headersSent) {
-            res.end();
-            return;
-        }
-        res.writeHead(401, { 'Content-Type': 'text/plain' }).end(reason);
-    };
     const httpServer = http.createServer(async (req, res) => {
         try {
             if (!req?.url) {
@@ -3139,6 +3071,8 @@ async function startStreamableHttpServer() {
             const hostHeader = req.headers.host ?? `${MCP_HOST}:${MCP_PORT}`;
             const base = `${scheme}://${hostHeader}`;
             const requestUrl = new URL(req.url, base);
+            if (auth.metadata(req, res, requestUrl.pathname))
+                return;
             if (req.method === 'OPTIONS' && requestUrl.pathname === MCP_HTTP_PATH) {
                 res.writeHead(204, {
                     'Access-Control-Allow-Origin': '*',
@@ -3150,9 +3084,16 @@ async function startStreamableHttpServer() {
                 return;
             }
             if (requestUrl.pathname === MCP_HTTP_PATH) {
+                const decision = await auth.authorize(req);
+                if (decision.status !== 200) {
+                    req.resume();
+                    auth.reject(res, decision.status);
+                    return;
+                }
+                // The transport never receives or retains a bearer credential.
+                delete req.headers.authorization;
                 if (req.method === 'POST') {
                     ensureHttpCorsHeaders(res);
-                    const providedAuthorization = getAuthorizationHeader(req);
                     const requestedSessionId = getSessionIdHeader(req);
                     let session = requestedSessionId ? sessions.get(requestedSessionId) : undefined;
                     if (requestedSessionId && !session) {
@@ -3160,15 +3101,9 @@ async function startStreamableHttpServer() {
                         sendJsonError(res, 404, 'Session not found', -32001);
                         return;
                     }
-                    let effectiveAuthorization = providedAuthorization ?? session?.authorization;
-                    if (!session && !providedAuthorization && MCP_API_KEY) {
+                    if (session && session.principal !== decision.principal) {
                         req.resume();
-                        rejectUnauthorized(res, 'Unauthorized');
-                        return;
-                    }
-                    if (!isValidAuthorizationHeader(effectiveAuthorization)) {
-                        req.resume();
-                        rejectUnauthorized(res, 'Unauthorized');
+                        auth.reject(res, 403);
                         return;
                     }
                     let parsedBody;
@@ -3209,15 +3144,11 @@ async function startStreamableHttpServer() {
                             return;
                         }
                         parsedBody = parseResult.body;
-                        logToConsole('debug', `HTTP MCP initialization payload:\n${stringifyForLog(parsedBody)}`);
                         if (!isInitializationPayload(parsedBody)) {
                             sendJsonError(res, 400, 'Invalid Request: Initialization payload required for new session');
                             return;
                         }
                         const serverInstance = new PlantUMLMCPServer();
-                        if (effectiveAuthorization) {
-                            serverInstance.setDefaultAuthorization(effectiveAuthorization);
-                        }
                         const sessionRecord = {
                             transport: new StreamableHTTPServerTransport({
                                 sessionIdGenerator: () => randomUUID(),
@@ -3234,7 +3165,7 @@ async function startStreamableHttpServer() {
                                 },
                             }),
                             instance: serverInstance,
-                            authorization: effectiveAuthorization,
+                            principal: decision.principal,
                         };
                         sessionRecord.instance.onClose(() => {
                             const activeSessionId = sessionRecord.transport.sessionId;
@@ -3260,14 +3191,6 @@ async function startStreamableHttpServer() {
                         await serverInstance.connect(sessionRecord.transport);
                         session = sessionRecord;
                     }
-                    effectiveAuthorization = providedAuthorization ?? session?.authorization;
-                    if (session && effectiveAuthorization && !req.headers.authorization) {
-                        req.headers.authorization = effectiveAuthorization;
-                    }
-                    if (session && providedAuthorization && providedAuthorization !== session.authorization) {
-                        session.authorization = providedAuthorization;
-                        session.instance.setDefaultAuthorization(providedAuthorization);
-                    }
                     if (!session) {
                         sendJsonError(res, 500, 'Failed to initialize MCP session');
                         return;
@@ -3287,18 +3210,9 @@ async function startStreamableHttpServer() {
                         sendJsonError(res, 404, 'Session not found', -32001);
                         return;
                     }
-                    const providedAuthorization = getAuthorizationHeader(req);
-                    const effectiveAuthorization = providedAuthorization ?? session.authorization;
-                    if (!isValidAuthorizationHeader(effectiveAuthorization)) {
-                        rejectUnauthorized(res, 'Unauthorized');
+                    if (session.principal !== decision.principal) {
+                        auth.reject(res, 403);
                         return;
-                    }
-                    if (effectiveAuthorization && !req.headers.authorization) {
-                        req.headers.authorization = effectiveAuthorization;
-                    }
-                    if (providedAuthorization && providedAuthorization !== session.authorization) {
-                        session.authorization = providedAuthorization;
-                        session.instance.setDefaultAuthorization(providedAuthorization);
                     }
                     await session.transport.handleRequest(req, res);
                     return;
@@ -3363,11 +3277,8 @@ async function startStreamableHttpServer() {
         process.once('SIGTERM', shutdown);
     });
 }
-async function startSseServer() {
+async function startSseServer(auth) {
     const sessions = new Map();
-    const rejectUnauthorized = (res, reason) => {
-        res.writeHead(401, { 'Content-Type': 'text/plain' }).end(reason);
-    };
     const httpServer = http.createServer(async (req, res) => {
         try {
             if (!req.url) {
@@ -3378,6 +3289,8 @@ async function startSseServer() {
             const hostHeader = req.headers.host ?? `${MCP_HOST}:${MCP_PORT}`;
             const base = `${scheme}://${hostHeader}`;
             const requestUrl = new URL(req.url, base);
+            if (auth.metadata(req, res, requestUrl.pathname))
+                return;
             if (req.method === 'OPTIONS') {
                 res.writeHead(204, {
                     'Access-Control-Allow-Origin': '*',
@@ -3390,20 +3303,20 @@ async function startSseServer() {
             if (req.method === 'GET' && requestUrl.pathname === MCP_SSE_PATH) {
                 res.setHeader('Access-Control-Allow-Origin', '*');
                 logToConsole('debug', `Incoming SSE GET from ${req.socket.remoteAddress} ${req.headers['user-agent'] ?? ''}`);
-                if (!isValidAuthorizationHeader(req.headers.authorization)) {
-                    logToConsole('warning', 'Rejected SSE connection due to invalid or missing authorization header.');
-                    rejectUnauthorized(res, 'Unauthorized');
+                const decision = await auth.authorize(req);
+                if (decision.status !== 200) {
+                    auth.reject(res, decision.status);
                     return;
                 }
+                delete req.headers.authorization;
                 const serverInstance = new PlantUMLMCPServer();
                 const absoluteMessagesEndpoint = new URL(MCP_SSE_MESSAGES_PATH, base).toString();
                 serverInstance.log('debug', `Advertising SSE message endpoint ${absoluteMessagesEndpoint}`);
                 const transport = new SSEServerTransport(absoluteMessagesEndpoint, res);
-                serverInstance.setDefaultAuthorization(req.headers.authorization ?? undefined);
                 sessions.set(transport.sessionId, {
                     transport,
                     instance: serverInstance,
-                    authorization: req.headers.authorization ?? undefined,
+                    principal: decision.principal,
                 });
                 serverInstance.onClose(() => {
                     sessions.delete(transport.sessionId);
@@ -3418,6 +3331,13 @@ async function startSseServer() {
             }
             if (req.method === 'POST' && requestUrl.pathname === MCP_SSE_MESSAGES_PATH) {
                 res.setHeader('Access-Control-Allow-Origin', '*');
+                const decision = await auth.authorize(req);
+                if (decision.status !== 200) {
+                    req.resume();
+                    auth.reject(res, decision.status);
+                    return;
+                }
+                delete req.headers.authorization;
                 const sessionId = requestUrl.searchParams.get('sessionId');
                 if (!sessionId) {
                     res.writeHead(400).end('Missing sessionId');
@@ -3430,15 +3350,10 @@ async function startSseServer() {
                     return;
                 }
                 session.instance.log('debug', `Incoming SSE POST for session ${sessionId}`);
-                const incomingAuthorization = req.headers.authorization ?? session.authorization;
-                if (!isValidAuthorizationHeader(incomingAuthorization)) {
-                    session.instance.log('warning', `Rejected SSE message for session ${sessionId} due to invalid authorization header.`);
-                    rejectUnauthorized(res, 'Unauthorized');
+                if (decision.principal !== session.principal) {
+                    req.resume();
+                    auth.reject(res, 403);
                     return;
-                }
-                if (incomingAuthorization !== session.authorization) {
-                    session.authorization = incomingAuthorization;
-                    session.instance.setDefaultAuthorization(incomingAuthorization);
                 }
                 await handleSsePostMessage(session, req, res);
                 return;
@@ -3520,7 +3435,6 @@ async function handleSsePostMessage(session, req, res) {
         res.writeHead(400).end('Invalid JSON payload');
         return;
     }
-    session.instance.log('debug', `SSE message received for session ${session.transport.sessionId}: ${body}`);
     try {
         await session.transport.handleMessage(message);
     }
@@ -3532,8 +3446,9 @@ async function handleSsePostMessage(session, req, res) {
     res.writeHead(202).end('Accepted');
 }
 async function start() {
+    const auth = new ResourceAuthorization(MCP_AUTH_MODE, MCP_HOST, MCP_TRANSPORT);
     if (MCP_TRANSPORT === 'http') {
-        await startStreamableHttpServer();
+        await startStreamableHttpServer(auth);
         return;
     }
     if (MCP_TRANSPORT === 'stdio') {
@@ -3544,7 +3459,7 @@ async function start() {
         return;
     }
     if (MCP_TRANSPORT === 'sse') {
-        await startSseServer();
+        await startSseServer(auth);
         return;
     }
     throw new Error(`Unsupported MCP_TRANSPORT value: ${MCP_TRANSPORT}`);
