@@ -3,6 +3,10 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 const CLIENT = 'mcp-dcs-plantuml';
 const SCOPE = 'plantuml:render';
 const AUDIENCE = 'https://mcp-servers.shared.mpn/plantuml/api/mcp';
+function denied(status, reason) {
+    console.warn(JSON.stringify({ event: 'oidc_authorization_denied', status, reason }));
+    return { status };
+}
 function checkedUrl(value, label, allowLoopbackHttp) {
     if (!value)
         throw new Error(`${label} is required`);
@@ -56,18 +60,18 @@ export class ResourceAuthorization {
             return { status: 200, principal: 'local' };
         const match = /^Bearer ([A-Za-z0-9._~-]+)$/i.exec(req.headers.authorization ?? '');
         if (!match)
-            return { status: 401 };
+            return denied(401, 'missing_bearer_token');
         try {
             if (!this.jwks) {
                 const discovery = await fetch(`${this.issuer}/.well-known/openid-configuration`, { signal: AbortSignal.timeout(5000), redirect: 'error' });
                 if (!discovery.ok)
-                    return { status: 401 };
+                    return denied(401, 'discovery_unavailable');
                 const metadata = await discovery.json();
                 if (metadata.issuer !== this.issuer)
-                    return { status: 401 };
+                    return denied(401, 'discovery_issuer_mismatch');
                 const uri = checkedUrl(metadata.jwks_uri, 'jwks_uri', this.allowLoopbackHttp);
                 if (uri.origin !== new URL(this.issuer).origin)
-                    return { status: 401 };
+                    return denied(401, 'jwks_origin_mismatch');
                 this.jwks = createRemoteJWKSet(uri, { timeoutDuration: 5000 });
             }
             const { payload } = await jwtVerify(match[1], this.jwks, {
@@ -78,19 +82,28 @@ export class ResourceAuthorization {
                 : Array.isArray(payload.aud) && payload.aud.every((audience) => typeof audience === 'string')
                     ? payload.aud
                     : [];
-            if (typeof payload.jti !== 'string' || !payload.jti.trim() || !audiences.includes(this.audience))
-                return { status: 401 };
+            if (typeof payload.jti !== 'string' || !payload.jti.trim())
+                return denied(401, 'missing_token_id');
+            if (!audiences.includes(this.audience))
+                return denied(401, 'audience_mismatch');
             const client = payload.client_id ?? payload.azp;
             const scopes = typeof payload.scope === 'string' ? payload.scope.split(/\s+/) : [];
-            if (typeof payload.sub !== 'string' || !payload.sub.trim() || client !== CLIENT ||
-                (payload.client_id !== undefined && payload.client_id !== CLIENT) || (payload.azp !== undefined && payload.azp !== CLIENT) ||
-                !Array.isArray(payload.groups) || !payload.groups.every((group) => typeof group === 'string') ||
-                !payload.groups.includes('users') || !scopes.includes(SCOPE))
-                return { status: 403 };
+            if (typeof payload.sub !== 'string' || !payload.sub.trim())
+                return denied(403, 'missing_subject');
+            if (client !== CLIENT || (payload.client_id !== undefined && payload.client_id !== CLIENT) ||
+                (payload.azp !== undefined && payload.azp !== CLIENT))
+                return denied(403, 'client_mismatch');
+            if (!Array.isArray(payload.groups) || !payload.groups.every((group) => typeof group === 'string')) {
+                return denied(403, 'invalid_groups_claim');
+            }
+            if (!payload.groups.includes('users'))
+                return denied(403, 'required_group_missing');
+            if (!scopes.includes(SCOPE))
+                return denied(403, 'required_scope_missing');
             return { status: 200, principal: createHash('sha256').update(JSON.stringify([payload.sub, CLIENT])).digest('hex') };
         }
         catch {
-            return { status: 401 };
+            return denied(401, 'token_verification_failed');
         }
     }
     reject(res, status) {
