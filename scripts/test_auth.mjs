@@ -4,7 +4,7 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { generateKeyPair, exportJWK, SignJWT } from 'jose';
 
-const audience = 'https://mcp-servers.shared.mpn/plantuml/api/mcp';
+const audience = 'https://mcp-servers.fmpn.fr/plantuml/api/mcp';
 const listen = (server) => new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
 const close = (server) => new Promise((resolve) => server.close(resolve));
 
@@ -104,7 +104,7 @@ test('OIDC protects every MCP request and binds sessions to their subject', asyn
   assert.ok(downstreamHeaders.length >= 2);
   assert.ok(downstreamHeaders.every((header) => header === 'Bearer downstream-machine-token'));
   assert.equal(tokenRequest.get('client_id'), 'mcp-plantuml');
-  assert.equal(tokenRequest.get('audience'), 'https://mcp-servers.shared.mpn/obfile/api/mcp');
+  assert.equal(tokenRequest.get('audience'), 'https://mcp-servers.fmpn.fr/obfile/api/mcp');
   assert.equal(tokenRequest.get('scope'), 'obfile:write');
   assert.ok(!logs.includes(valid));
   assert.ok(!logs.includes('human-a'));

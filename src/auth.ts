@@ -4,7 +4,7 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 const CLIENT = 'mcp-dcs-plantuml';
 const SCOPE = 'plantuml:render';
-const AUDIENCE = 'https://mcp-servers.shared.mpn/plantuml/api/mcp';
+const AUDIENCE = 'https://mcp-servers.fmpn.fr/plantuml/api/mcp';
 type Decision = { status: 200; principal: string } | { status: 401 | 403 };
 
 function denied(status: 401 | 403, reason: string): Decision {

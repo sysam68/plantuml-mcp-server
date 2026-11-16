@@ -143,7 +143,7 @@ const OB_FILE_OIDC_TOKEN_ENDPOINT = process.env.OB_FILE_OIDC_TOKEN_ENDPOINT || '
 const OB_FILE_OIDC_CLIENT_ID = process.env.OB_FILE_OIDC_CLIENT_ID || '';
 const OB_FILE_OIDC_CLIENT_SECRET = process.env.OB_FILE_OIDC_CLIENT_SECRET || '';
 const OB_FILE_OIDC_SCOPE = process.env.OB_FILE_OIDC_SCOPE || 'obfile:write';
-const OB_FILE_OIDC_AUDIENCE = process.env.OB_FILE_OIDC_AUDIENCE || 'https://mcp-servers.shared.mpn/obfile/api/mcp';
+const OB_FILE_OIDC_AUDIENCE = process.env.OB_FILE_OIDC_AUDIENCE || 'https://mcp-servers.fmpn.fr/obfile/api/mcp';
 const OB_FILE_OIDC_FORWARDED_PROTO = process.env.OB_FILE_OIDC_FORWARDED_PROTO || '';
 const OB_FILE_OIDC_FORWARDED_HOST = process.env.OB_FILE_OIDC_FORWARDED_HOST || '';
 const EXPOSE_PROMPT_AS_TOOL = parseBoolean(process.env.EXPOSE_PROMPT_AS_TOOL, false);
@@ -225,7 +225,7 @@ function requireObFileTokenEndpoint(metadata: ObFileOidcMetadata): string {
 async function getObFileApiAccessToken(): Promise<string | undefined> {
   if (MCP_AUTH_MODE === 'oidc' && (
     !hasObFileOidcClientCredentials() || OB_FILE_OIDC_CLIENT_ID !== 'mcp-plantuml' ||
-    OB_FILE_OIDC_AUDIENCE !== 'https://mcp-servers.shared.mpn/obfile/api/mcp' || OB_FILE_OIDC_SCOPE !== 'obfile:write'
+    OB_FILE_OIDC_AUDIENCE !== 'https://mcp-servers.fmpn.fr/obfile/api/mcp' || OB_FILE_OIDC_SCOPE !== 'obfile:write'
   )) {
     throw new Error('OBFile requires the configured mcp-plantuml machine client, OBFile audience and obfile:write scope');
   }

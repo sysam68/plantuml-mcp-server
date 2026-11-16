@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 const CLIENT = 'mcp-dcs-plantuml';
 const SCOPE = 'plantuml:render';
-const AUDIENCE = 'https://mcp-servers.shared.mpn/plantuml/api/mcp';
+const AUDIENCE = 'https://mcp-servers.fmpn.fr/plantuml/api/mcp';
 function denied(status, reason) {
     console.warn(JSON.stringify({ event: 'oidc_authorization_denied', status, reason }));
     return { status };

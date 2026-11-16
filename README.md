@@ -41,8 +41,8 @@ Use `npx plantuml-mcp-server` or `node dist/plantuml-mcp-server.js` once built.
 MCP_TRANSPORT=http \
 MCP_AUTH_MODE=oidc \
 OIDC_ISSUER_URL=https://your-issuer.example \
-OIDC_AUDIENCE=https://mcp-servers.shared.mpn/plantuml/api/mcp \
-MCP_RESOURCE_URL=https://mcp-servers.shared.mpn/plantuml/api/mcp \
+OIDC_AUDIENCE=https://mcp-servers.fmpn.fr/plantuml/api/mcp \
+MCP_RESOURCE_URL=https://mcp-servers.fmpn.fr/plantuml/api/mcp \
 MCP_HOST=0.0.0.0 \
 MCP_PORT=8765 \
 MCP_HTTP_PATH=/mcp \
@@ -58,8 +58,8 @@ node dist/plantuml-mcp-server.js
 MCP_TRANSPORT=sse \
 MCP_AUTH_MODE=oidc \
 OIDC_ISSUER_URL=https://your-issuer.example \
-OIDC_AUDIENCE=https://mcp-servers.shared.mpn/plantuml/api/mcp \
-MCP_RESOURCE_URL=https://mcp-servers.shared.mpn/plantuml/api/mcp \
+OIDC_AUDIENCE=https://mcp-servers.fmpn.fr/plantuml/api/mcp \
+MCP_RESOURCE_URL=https://mcp-servers.fmpn.fr/plantuml/api/mcp \
 MCP_HOST=0.0.0.0 \
 MCP_PORT=8765 \
 MCP_SSE_PATH=/sse \
@@ -103,7 +103,7 @@ Drop these files into your MCP-aware client or copy the snippets as needed. Conf
 | `MCP_SSE_MESSAGES_PATH` | `/messages` | Message ingestion endpoint |
 | `MCP_AUTH_MODE` | `oidc` | `oidc` for network servers; explicit `none` is restricted to loopback or stdio |
 | `OIDC_ISSUER_URL` | required | Exact HTTPS issuer used for discovery and token validation |
-| `OIDC_AUDIENCE` | required | Must be `https://mcp-servers.shared.mpn/plantuml/api/mcp` |
+| `OIDC_AUDIENCE` | required | Must be `https://mcp-servers.fmpn.fr/plantuml/api/mcp` |
 | `MCP_RESOURCE_URL` | required | Canonical HTTPS resource URL advertised in RFC 9728 metadata |
 | `MCP_OIDC_ALLOW_INSECURE_LOOPBACK` | unset | Test-only: permit HTTP discovery/resource URLs on loopback |
 | `OB_FILE_API_BASE_URL` | unset | `ob-file` management API base URL (for example `http://ob-file:8000`) |
@@ -113,7 +113,7 @@ Drop these files into your MCP-aware client or copy the snippets as needed. Conf
 | `OB_FILE_OIDC_CLIENT_ID` | unset | OIDC client identifier used by `mcp-plantuml` |
 | `OB_FILE_OIDC_CLIENT_SECRET` | unset | OIDC client secret used by `mcp-plantuml` |
 | `OB_FILE_OIDC_SCOPE` | `obfile:write` | Scope requested for the machine upload/public-url flow |
-| `OB_FILE_OIDC_AUDIENCE` | `https://mcp-servers.shared.mpn/obfile/api/mcp` | OBFile audience for the separate machine token |
+| `OB_FILE_OIDC_AUDIENCE` | `https://mcp-servers.fmpn.fr/obfile/api/mcp` | OBFile audience for the separate machine token |
 | `OB_FILE_OIDC_FORWARDED_PROTO` | unset | Optional `X-Forwarded-Proto` header for internal Authelia calls |
 | `OB_FILE_OIDC_FORWARDED_HOST` | unset | Optional `X-Forwarded-Host` header for internal Authelia calls |
 | `MCP_MAX_INLINE_IMAGE_BYTES` | `2097152` | Maximum rendered image size embedded directly in a tool result |
