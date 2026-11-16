@@ -93,11 +93,6 @@ export class ResourceAuthorization {
             if (client !== CLIENT || (payload.client_id !== undefined && payload.client_id !== CLIENT) ||
                 (payload.azp !== undefined && payload.azp !== CLIENT))
                 return denied(403, 'client_mismatch');
-            if (!Array.isArray(payload.groups) || !payload.groups.every((group) => typeof group === 'string')) {
-                return denied(403, 'invalid_groups_claim');
-            }
-            if (!payload.groups.includes('users'))
-                return denied(403, 'required_group_missing');
             if (!scopes.includes(SCOPE))
                 return denied(403, 'required_scope_missing');
             return { status: 200, principal: createHash('sha256').update(JSON.stringify([payload.sub, CLIENT])).digest('hex') };

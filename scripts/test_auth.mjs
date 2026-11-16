@@ -60,6 +60,8 @@ test('OIDC protects every MCP request and binds sessions to their subject', asyn
       .setAudience(options.audience ?? audience).setJti('test-id').setExpirationTime(options.expires ?? '5m').sign(privateKey);
   };
   const valid = await token();
+  const validWithoutGroups = await token({ groups: undefined });
+  const validWithUnrelatedGroup = await token({ groups: ['guests'] });
   const validAudienceArray = await token({}, { audience: [audience, 'https://secondary.example.test/resource'] });
   const missingJti = await new SignJWT({ sub: 'human-a', client_id: 'mcp-dcs-plantuml', groups: ['users'], scope: 'plantuml:render' })
     .setProtectedHeader({ alg: 'RS256', kid: 'test-key' }).setIssuer(issuer).setAudience(audience).setExpirationTime('5m').sign(privateKey);
@@ -81,7 +83,9 @@ test('OIDC protects every MCP request and binds sessions to their subject', asyn
     assert.match(response.headers.get('www-authenticate'), /resource_metadata=/);
   }
   assert.equal((await rpc(validAudienceArray, initialize)).status, 200);
-  for (const claims of [{ client_id: 'wrong' }, { scope: 'other' }, { sub: '' }, { groups: [] }, { groups: 'users' }]) {
+  assert.equal((await rpc(validWithoutGroups, initialize)).status, 200);
+  assert.equal((await rpc(validWithUnrelatedGroup, initialize)).status, 200);
+  for (const claims of [{ client_id: 'wrong' }, { scope: 'other' }, { sub: '' }]) {
     assert.equal((await rpc(await token(claims), initialize)).status, 403);
   }
   const initialized = await rpc(valid, initialize);
