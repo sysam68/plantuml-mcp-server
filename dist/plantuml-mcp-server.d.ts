@@ -43,7 +43,6 @@ type BusinessScenarioDefinition = {
 };
 export declare class PlantUMLMCPServer {
     private server;
-    private defaultAuthorization?;
     private clientLogLevel?;
     private supportsCompletions;
     constructor();
@@ -77,8 +76,6 @@ export declare class PlantUMLMCPServer {
     private formatErrorForClient;
     private forwardLog;
     log(level: LogLevel, message: string, error?: unknown, data?: unknown): void;
-    setDefaultAuthorization(authHeader?: string): void;
-    private assertAuthorizedForRead;
     connect(transport: Transport): Promise<void>;
     close(): Promise<void>;
     onClose(handler: () => void): void;

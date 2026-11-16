@@ -2,7 +2,7 @@
   "type": "http",
   "url": "http://plantuml-mcp:8765/mcp",
   "headers": {
-    "Authorization": "Bearer 1234"
+    "Authorization": "Bearer ${PLANTUML_ACCESS_TOKEN}"
   },
   "options": {
     "enableJsonResponse": true

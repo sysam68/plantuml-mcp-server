@@ -28,9 +28,10 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "node dist/plantuml-mcp-server.js",
-    "start:stdio": "MCP_TRANSPORT=stdio node dist/plantuml-mcp-server.js",
+    "start:stdio": "MCP_AUTH_MODE=none MCP_TRANSPORT=stdio node dist/plantuml-mcp-server.js",
     "start:sse": "MCP_TRANSPORT=sse node dist/plantuml-mcp-server.js",
     "test:business-scenario": "node scripts/test_business_scenario_fixture.mjs",
+    "test:auth": "node --test scripts/test_auth.mjs",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
@@ -41,9 +42,10 @@
   ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
+    "content-type": "^1.0.5",
+    "jose": "^5.10.0",
     "plantuml-encoder": "^1.4.0",
-    "raw-body": "^2.5.2",
-    "content-type": "^1.0.5"
+    "raw-body": "^2.5.2"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

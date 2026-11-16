@@ -11,7 +11,7 @@
         "MCP_TRANSPORT": "stdio",
         "LOG_LEVEL": "info",
         "PLANTUML_SERVER_URL": "https://www.plantuml.com/plantuml",
-        "MCP_API_KEY": "${MCP_API_KEY}"
+        "MCP_AUTH_MODE": "none"
       }
     },
     {
@@ -23,6 +23,7 @@
       ],
       "env": {
         "MCP_TRANSPORT": "stdio",
+        "MCP_AUTH_MODE": "none",
         "PLANTUML_SERVER_URL": "http://plantuml-server:8080"
       }
     }

@@ -66,6 +66,7 @@ async function main() {
     env: {
       ...process.env,
       MCP_TRANSPORT: 'stdio',
+      MCP_AUTH_MODE: 'none',
       LOG_LEVEL: process.env.LOG_LEVEL ?? 'debug',
       PLANTUML_SERVER_URL: process.env.PLANTUML_SERVER_URL ?? 'https://www.plantuml.com/plantuml',
     },
