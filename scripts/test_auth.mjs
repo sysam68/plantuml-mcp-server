@@ -88,7 +88,24 @@ test('OIDC protects every MCP request and binds sessions to their subject', asyn
   assert.equal((await rpc(validInternalAudience, initialize)).status, 200);
   assert.equal((await rpc(validWithoutGroups, initialize)).status, 200);
   assert.equal((await rpc(validWithUnrelatedGroup, initialize)).status, 200);
-  for (const claims of [{ client_id: 'wrong' }, { scope: 'other' }, { sub: '' }]) {
+  for (const claims of [
+    { scope: ['plantuml:render'] },
+    { scope: undefined, scp: 'plantuml:render' },
+    { scope: undefined, scp: ['plantuml:render'] },
+    { scope: 'plantuml:render', scp: ['plantuml:render'] },
+  ]) {
+    assert.equal((await rpc(await token(claims), initialize)).status, 200);
+  }
+  for (const claims of [
+    { client_id: 'wrong' },
+    { scope: 'other' },
+    { sub: '' },
+    { scope: undefined },
+    { scope: ['plantuml:render', 1] },
+    { scope: undefined, scp: ['plantuml:render', 1] },
+    { scope: undefined, scp: [] },
+    { scope: 'plantuml:render', scp: ['other'] },
+  ]) {
     assert.equal((await rpc(await token(claims), initialize)).status, 403);
   }
   const initialized = await rpc(valid, initialize);

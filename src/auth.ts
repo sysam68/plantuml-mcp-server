@@ -10,6 +10,26 @@ const AUDIENCES = [
 ] as const;
 type Decision = { status: 200; principal: string } | { status: 401 | 403 };
 
+function normalizeScopes(payload: Record<string, unknown>): string[] | undefined {
+  const normalized = new Map<string, string[]>();
+  for (const claimName of ['scope', 'scp'] as const) {
+    if (!(claimName in payload)) continue;
+    const value = payload[claimName];
+    const scopes = typeof value === 'string'
+      ? value.split(/\s+/).filter(Boolean)
+      : Array.isArray(value) && value.every((item) => typeof item === 'string' && item.length > 0 && !/\s/.test(item))
+        ? value
+        : undefined;
+    if (!scopes?.length) return undefined;
+    normalized.set(claimName, scopes);
+  }
+  if (normalized.size === 0) return undefined;
+  const scope = normalized.get('scope');
+  const scp = normalized.get('scp');
+  if (scope && scp && (scope.length !== scp.length || scope.some((item) => !scp.includes(item)))) return undefined;
+  return [...(scope ?? scp!)];
+}
+
 function denied(status: 401 | 403, reason: string): Decision {
   console.warn(JSON.stringify({ event: 'oidc_authorization_denied', status, reason }));
   return { status };
@@ -87,10 +107,11 @@ export class ResourceAuthorization {
       if (typeof payload.jti !== 'string' || !payload.jti.trim()) return denied(401, 'missing_token_id');
       if (!audiences.some((audience) => this.audiences!.includes(audience))) return denied(401, 'audience_mismatch');
       const client = payload.client_id ?? payload.azp;
-      const scopes = typeof payload.scope === 'string' ? payload.scope.split(/\s+/) : [];
+      const scopes = normalizeScopes(payload);
       if (typeof payload.sub !== 'string' || !payload.sub.trim()) return denied(403, 'missing_subject');
       if (client !== CLIENT || (payload.client_id !== undefined && payload.client_id !== CLIENT) ||
           (payload.azp !== undefined && payload.azp !== CLIENT)) return denied(403, 'client_mismatch');
+      if (!scopes) return denied(403, 'invalid_scope_claim');
       if (!scopes.includes(SCOPE)) return denied(403, 'required_scope_missing');
       return { status: 200, principal: createHash('sha256').update(JSON.stringify([payload.sub, CLIENT])).digest('hex') };
     } catch {
