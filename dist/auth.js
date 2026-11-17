@@ -2,7 +2,10 @@ import { createHash } from 'node:crypto';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 const CLIENT = 'mcp-dcs-plantuml';
 const SCOPE = 'plantuml:render';
-const AUDIENCE = 'https://mcp-servers.fmpn.fr/plantuml/api/mcp';
+const AUDIENCES = [
+    'https://mcp-servers.fmpn.fr/plantuml/api/mcp',
+    'https://mcp-servers.shared.mpn/plantuml/api/mcp',
+];
 function denied(status, reason) {
     console.warn(JSON.stringify({ event: 'oidc_authorization_denied', status, reason }));
     return { status };
@@ -20,7 +23,7 @@ function checkedUrl(value, label, allowLoopbackHttp) {
 export class ResourceAuthorization {
     mode;
     issuer;
-    audience;
+    audiences;
     resource;
     metadataPath;
     allowLoopbackHttp;
@@ -41,11 +44,12 @@ export class ResourceAuthorization {
             throw new Error('HTTP and SSE require MCP_AUTH_MODE=oidc; stdio requires explicit none');
         this.issuer = checkedUrl(env.OIDC_ISSUER_URL, 'OIDC_ISSUER_URL', this.allowLoopbackHttp).toString().replace(/\/$/, '');
         this.resource = checkedUrl(env.MCP_RESOURCE_URL, 'MCP_RESOURCE_URL', this.allowLoopbackHttp).toString().replace(/\/$/, '');
-        this.audience = env.OIDC_AUDIENCE;
-        if (this.audience !== AUDIENCE)
-            throw new Error('OIDC_AUDIENCE must be the canonical PlantUML audience');
-        if (this.resource !== AUDIENCE)
-            throw new Error('MCP_RESOURCE_URL must be the canonical PlantUML resource');
+        this.audiences = (env.OIDC_AUDIENCES ?? '').split(',').map((value) => value.trim()).filter(Boolean);
+        if (this.audiences.length !== AUDIENCES.length || !AUDIENCES.every((value) => this.audiences.includes(value))) {
+            throw new Error('OIDC_AUDIENCES must contain the public and internal PlantUML audiences');
+        }
+        if (!AUDIENCES.includes(this.resource))
+            throw new Error('MCP_RESOURCE_URL must be a PlantUML resource');
         this.metadataPath = `/.well-known/oauth-protected-resource${new URL(this.resource).pathname.replace(/\/$/, '')}`;
     }
     metadata(req, res, pathname) {
@@ -75,7 +79,7 @@ export class ResourceAuthorization {
                 this.jwks = createRemoteJWKSet(uri, { timeoutDuration: 5000 });
             }
             const { payload } = await jwtVerify(match[1], this.jwks, {
-                issuer: this.issuer, audience: this.audience, algorithms: ['RS256', 'ES256'], requiredClaims: ['exp', 'jti'],
+                issuer: this.issuer, audience: this.audiences, algorithms: ['RS256', 'ES256'], requiredClaims: ['exp', 'jti'],
             });
             const audiences = typeof payload.aud === 'string'
                 ? [payload.aud]
@@ -84,7 +88,7 @@ export class ResourceAuthorization {
                     : [];
             if (typeof payload.jti !== 'string' || !payload.jti.trim())
                 return denied(401, 'missing_token_id');
-            if (!audiences.includes(this.audience))
+            if (!audiences.some((audience) => this.audiences.includes(audience)))
                 return denied(401, 'audience_mismatch');
             const client = payload.client_id ?? payload.azp;
             const scopes = typeof payload.scope === 'string' ? payload.scope.split(/\s+/) : [];

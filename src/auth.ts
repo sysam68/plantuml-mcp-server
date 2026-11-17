@@ -4,7 +4,10 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 const CLIENT = 'mcp-dcs-plantuml';
 const SCOPE = 'plantuml:render';
-const AUDIENCE = 'https://mcp-servers.fmpn.fr/plantuml/api/mcp';
+const AUDIENCES = [
+  'https://mcp-servers.fmpn.fr/plantuml/api/mcp',
+  'https://mcp-servers.shared.mpn/plantuml/api/mcp',
+] as const;
 type Decision = { status: 200; principal: string } | { status: 401 | 403 };
 
 function denied(status: 401 | 403, reason: string): Decision {
@@ -24,7 +27,7 @@ function checkedUrl(value: string | undefined, label: string, allowLoopbackHttp:
 
 export class ResourceAuthorization {
   private readonly issuer?: string;
-  private readonly audience?: string;
+  private readonly audiences?: string[];
   private readonly resource?: string;
   private readonly metadataPath?: string;
   private readonly allowLoopbackHttp: boolean;
@@ -44,9 +47,11 @@ export class ResourceAuthorization {
     if (mode !== 'oidc' || transport === 'stdio') throw new Error('HTTP and SSE require MCP_AUTH_MODE=oidc; stdio requires explicit none');
     this.issuer = checkedUrl(env.OIDC_ISSUER_URL, 'OIDC_ISSUER_URL', this.allowLoopbackHttp).toString().replace(/\/$/, '');
     this.resource = checkedUrl(env.MCP_RESOURCE_URL, 'MCP_RESOURCE_URL', this.allowLoopbackHttp).toString().replace(/\/$/, '');
-    this.audience = env.OIDC_AUDIENCE;
-    if (this.audience !== AUDIENCE) throw new Error('OIDC_AUDIENCE must be the canonical PlantUML audience');
-    if (this.resource !== AUDIENCE) throw new Error('MCP_RESOURCE_URL must be the canonical PlantUML resource');
+    this.audiences = (env.OIDC_AUDIENCES ?? '').split(',').map((value) => value.trim()).filter(Boolean);
+    if (this.audiences.length !== AUDIENCES.length || !AUDIENCES.every((value) => this.audiences!.includes(value))) {
+      throw new Error('OIDC_AUDIENCES must contain the public and internal PlantUML audiences');
+    }
+    if (!AUDIENCES.includes(this.resource as typeof AUDIENCES[number])) throw new Error('MCP_RESOURCE_URL must be a PlantUML resource');
     this.metadataPath = `/.well-known/oauth-protected-resource${new URL(this.resource).pathname.replace(/\/$/, '')}`;
   }
 
@@ -72,7 +77,7 @@ export class ResourceAuthorization {
         this.jwks = createRemoteJWKSet(uri, { timeoutDuration: 5000 });
       }
       const { payload } = await jwtVerify(match[1], this.jwks, {
-        issuer: this.issuer, audience: this.audience, algorithms: ['RS256', 'ES256'], requiredClaims: ['exp', 'jti'],
+        issuer: this.issuer, audience: this.audiences, algorithms: ['RS256', 'ES256'], requiredClaims: ['exp', 'jti'],
       });
       const audiences = typeof payload.aud === 'string'
         ? [payload.aud]
@@ -80,7 +85,7 @@ export class ResourceAuthorization {
           ? payload.aud
           : [];
       if (typeof payload.jti !== 'string' || !payload.jti.trim()) return denied(401, 'missing_token_id');
-      if (!audiences.includes(this.audience!)) return denied(401, 'audience_mismatch');
+      if (!audiences.some((audience) => this.audiences!.includes(audience))) return denied(401, 'audience_mismatch');
       const client = payload.client_id ?? payload.azp;
       const scopes = typeof payload.scope === 'string' ? payload.scope.split(/\s+/) : [];
       if (typeof payload.sub !== 'string' || !payload.sub.trim()) return denied(403, 'missing_subject');

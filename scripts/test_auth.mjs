@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { generateKeyPair, exportJWK, SignJWT } from 'jose';
 
 const audience = 'https://mcp-servers.fmpn.fr/plantuml/api/mcp';
+const internalAudience = 'https://mcp-servers.shared.mpn/plantuml/api/mcp';
 const listen = (server) => new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
 const close = (server) => new Promise((resolve) => server.close(resolve));
 
@@ -40,7 +41,7 @@ test('OIDC protects every MCP request and binds sessions to their subject', asyn
   await close(reservation);
   const child = spawn(process.execPath, ['dist/plantuml-mcp-server.js'], {
     env: { ...process.env, MCP_TRANSPORT: 'http', MCP_HOST: '127.0.0.1', MCP_PORT: String(port), MCP_AUTH_MODE: 'oidc',
-      OIDC_ISSUER_URL: issuer, MCP_OIDC_ALLOW_INSECURE_LOOPBACK: 'true', OIDC_AUDIENCE: audience, MCP_RESOURCE_URL: audience,
+      OIDC_ISSUER_URL: issuer, MCP_OIDC_ALLOW_INSECURE_LOOPBACK: 'true', OIDC_AUDIENCES: `${audience},${internalAudience}`, MCP_RESOURCE_URL: audience,
       MCP_HTTP_ENABLE_JSON_RESPONSES: 'true', PLANTUML_SERVER_URL: issuer, OB_FILE_API_BASE_URL: issuer,
       OB_FILE_OIDC_TOKEN_ENDPOINT: `${issuer}/token`, OB_FILE_OIDC_CLIENT_ID: 'mcp-plantuml', OB_FILE_OIDC_CLIENT_SECRET: 'test-secret', LOG_LEVEL: 'debug' },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -63,6 +64,7 @@ test('OIDC protects every MCP request and binds sessions to their subject', asyn
   const validWithoutGroups = await token({ groups: undefined });
   const validWithUnrelatedGroup = await token({ groups: ['guests'] });
   const validAudienceArray = await token({}, { audience: [audience, 'https://secondary.example.test/resource'] });
+  const validInternalAudience = await token({}, { audience: internalAudience });
   const missingJti = await new SignJWT({ sub: 'human-a', client_id: 'mcp-dcs-plantuml', groups: ['users'], scope: 'plantuml:render' })
     .setProtectedHeader({ alg: 'RS256', kid: 'test-key' }).setIssuer(issuer).setAudience(audience).setExpirationTime('5m').sign(privateKey);
   const otherKeys = await generateKeyPair('RS256');
@@ -83,6 +85,7 @@ test('OIDC protects every MCP request and binds sessions to their subject', asyn
     assert.match(response.headers.get('www-authenticate'), /resource_metadata=/);
   }
   assert.equal((await rpc(validAudienceArray, initialize)).status, 200);
+  assert.equal((await rpc(validInternalAudience, initialize)).status, 200);
   assert.equal((await rpc(validWithoutGroups, initialize)).status, 200);
   assert.equal((await rpc(validWithUnrelatedGroup, initialize)).status, 200);
   for (const claims of [{ client_id: 'wrong' }, { scope: 'other' }, { sub: '' }]) {
@@ -104,14 +107,14 @@ test('OIDC protects every MCP request and binds sessions to their subject', asyn
   assert.ok(downstreamHeaders.length >= 2);
   assert.ok(downstreamHeaders.every((header) => header === 'Bearer downstream-machine-token'));
   assert.equal(tokenRequest.get('client_id'), 'mcp-plantuml');
-  assert.equal(tokenRequest.get('audience'), 'https://mcp-servers.fmpn.fr/obfile/api/mcp');
+  assert.equal(tokenRequest.get('audience'), 'https://mcp-servers.shared.mpn/obfile/api/mcp');
   assert.equal(tokenRequest.get('scope'), 'obfile:write');
   assert.ok(!logs.includes(valid));
   assert.ok(!logs.includes('human-a'));
 });
 
 test('startup rejects incomplete OIDC and non-loopback local bypass', async () => {
-  for (const env of [{ MCP_AUTH_MODE: 'oidc', OIDC_ISSUER_URL: '', OIDC_AUDIENCE: '', MCP_RESOURCE_URL: '' }, { MCP_AUTH_MODE: 'none', MCP_HOST: '0.0.0.0' }, { MCP_AUTH_MODE: 'oidc', MCP_OIDC_ALLOW_INSECURE_LOOPBACK: 'true', MCP_HOST: '0.0.0.0' }]) {
+  for (const env of [{ MCP_AUTH_MODE: 'oidc', OIDC_ISSUER_URL: '', OIDC_AUDIENCES: '', MCP_RESOURCE_URL: '' }, { MCP_AUTH_MODE: 'none', MCP_HOST: '0.0.0.0' }, { MCP_AUTH_MODE: 'oidc', MCP_OIDC_ALLOW_INSECURE_LOOPBACK: 'true', MCP_HOST: '0.0.0.0' }]) {
     const child = spawn(process.execPath, ['dist/plantuml-mcp-server.js'], { env: { ...process.env, MCP_TRANSPORT: 'http', ...env }, stdio: 'ignore' });
     assert.equal(await new Promise((resolve) => child.once('exit', resolve)), 1);
   }
