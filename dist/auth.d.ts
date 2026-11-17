@@ -8,7 +8,7 @@ type Decision = {
 export declare class ResourceAuthorization {
     private readonly mode;
     private readonly issuer?;
-    private readonly audience?;
+    private readonly audiences?;
     private readonly resource?;
     private readonly metadataPath?;
     private readonly allowLoopbackHttp;
